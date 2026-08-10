@@ -87,6 +87,16 @@ UIWidget
   margin-top: 1
 
   UIWidget
+    id: bigLogo
+    anchors.top: parent.top
+    anchors.horizontalCenter: parent.horizontalCenter
+    margin-top: 20
+    size: 440 293
+    focusable: false
+    image-source: /images/general/biglogo
+    image-smooth: true
+
+  UIWidget
     id: menu
     anchors.left: parent.left
     anchors.bottom: parent.bottom

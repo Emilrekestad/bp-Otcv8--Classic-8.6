@@ -1,0 +1,18 @@
+# Build artifacts (MSVC intermediate/output, vcpkg dependency builds)
+vc17/otclient/
+vcpkg_installed/
+*.pdb
+*.exp
+*.lib
+*.ilk
+
+# Dev/test session logs
+*.log
+
+# Real Tibia client assets (Tibia.spr/.dat) - copyrighted CipSoft content,
+# also far over GitHub's 100MB limit (Tibia.spr alone is ~430MB).
+# Distributed separately, not part of source control.
+data/things/
+
+# Local minimap cache from testing - regenerated per install, not source.
+data/minimap.otmm

@@ -56,7 +56,7 @@ int Http::get(const std::string& url, int timeout, const std::map<std::string, s
                     g_lua.callGlobalField("g_http", "onGetProgress", result->operationId, result->url, result->progress);
                     return;
                 }
-                g_lua.callGlobalField("g_http", "onGet", result->operationId, result->url, result->error, result);
+                g_lua.callGlobalField("g_http", "onGet", result->operationId, result->url, result->error, std::string(result->body.begin(), result->body.end()));
             });
             if (finished) {
                 m_operations.erase(operationId);
@@ -90,7 +90,7 @@ int Http::post(const std::string& url, const std::string& data, int timeout, con
                     g_lua.callGlobalField("g_http", "onPostProgress", result->operationId, result->url, result->progress);
                     return;
                 }
-                g_lua.callGlobalField("g_http", "onPost", result->operationId, result->url, result->error, result);
+                g_lua.callGlobalField("g_http", "onPost", result->operationId, result->url, result->error, std::string(result->body.begin(), result->body.end()));
             });
             if (finished) {
                 m_operations.erase(operationId);

@@ -128,7 +128,36 @@ OptionPanel
       anchors.right: parent.right
       anchors.top: parent.top
       margin: 5
-      
+
+  HorizontalSeparator
+    margin-top: 10
+
+  Label
+    id: leftPanelsLabel
+    margin-top: 10
+    @onSetup: |
+      local value = modules.client_options.getOption('leftPanels')
+      self:setText(tr('Left side panels: %d', value))
+
+  OptionScrollbar
+    id: leftPanels
+    margin-top: 3
+    minimum: 0
+    maximum: 4
+
+  Label
+    id: rightPanelsLabel
+    margin-top: 8
+    @onSetup: |
+      local value = modules.client_options.getOption('rightPanels')
+      self:setText(tr('Right side panels: %d', value))
+
+  OptionScrollbar
+    id: rightPanels
+    margin-top: 3
+    minimum: 1
+    maximum: 4
+
   Panel
     height: 30
     margin-top: 10

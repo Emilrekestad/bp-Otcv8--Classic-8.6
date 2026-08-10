@@ -12,7 +12,7 @@ function HTTP.get(url, callback)
 		return error("HTTP.get is not supported")
 	end
 
-	local operation = g_http.get(url, HTTP.timeout)
+	local operation = g_http.get(url, HTTP.timeout, {})
 	HTTP.operations[operation] = {
 		type = "get",
 		url = url,
@@ -27,7 +27,7 @@ function HTTP.getJSON(url, callback)
 		return error("HTTP.getJSON is not supported")
 	end
 
-	local operation = g_http.get(url, HTTP.timeout)
+	local operation = g_http.get(url, HTTP.timeout, {})
 	HTTP.operations[operation] = {
 		json = true,
 		type = "get",
@@ -47,7 +47,7 @@ function HTTP.post(url, data, callback)
 		data = json.encode(data)
 	end
 
-	local operation = g_http.post(url, data, HTTP.timeout)
+	local operation = g_http.post(url, data, HTTP.timeout, {})
 	HTTP.operations[operation] = {
 		type = "post",
 		url = url,
@@ -66,7 +66,7 @@ function HTTP.postJSON(url, data, callback)
 		data = json.encode(data)
 	end
 
-	local operation = g_http.post(url, data, HTTP.timeout, true)
+	local operation = g_http.post(url, data, HTTP.timeout, {})
 	HTTP.operations[operation] = {
 		json = true,
 		type = "post",
@@ -82,7 +82,7 @@ function HTTP.download(url, file, callback, progressCallback)
 		return error("HTTP.download is not supported")
 	end
 
-	local operation = g_http.download(url, file, HTTP.timeout)
+	local operation = g_http.download(url, file, HTTP.timeout, {})
 	HTTP.operations[operation] = {
 		type = "download",
 		url = url,
@@ -109,7 +109,7 @@ function HTTP.downloadImage(url, callback)
 
 	local file = "autoimage_" .. HTTP.imageId .. ".png"
 	HTTP.imageId = HTTP.imageId + 1
-	local operation = g_http.download(url, file, HTTP.timeout)
+	local operation = g_http.download(url, file, HTTP.timeout, {})
 	HTTP.operations[operation] = {
 		type = "image",
 		url = url,

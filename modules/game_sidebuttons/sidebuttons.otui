@@ -127,30 +127,30 @@ NonClosableMiniWindow
         image-clip: 20 0 20 20
 
     UIWidget
-      id: botButton
-      image-source: buttons/bot
+      id: questLogButton
+      image-source: buttons/questlog
       anchors.left: parent.left
       anchors.top: skillsButton.bottom
       margin-left: 5
       margin-top: 3
       size: 20 20
       image-clip: 0 0 20 20
-      @onClick: modules.game_bot.toggle()
+      @onClick: if modules.game_questlog then g_game.requestQuestLog() end
 
       $pressed:
-        image-clip: 20 0 20 20
+        image-clip: 0 20 20 20
 
       $on:
-        image-clip: 20 0 20 20
+        image-clip: 0 20 20 20
 
       $checked:
-        image-clip: 20 0 20 20
+        image-clip: 0 20 20 20
 
     UIWidget
       id: ciclopediaButton
       image-source: buttons/ciclopedia
-      anchors.left: botButton.right
-      anchors.top: botButton.top
+      anchors.left: questLogButton.right
+      anchors.top: questLogButton.top
       margin-left: 3
       size: 20 20
       image-clip: 0 0 20 20
@@ -227,7 +227,7 @@ NonClosableMiniWindow
       image-source: buttons/forge
       image-clip: 0 0 20 20
       anchors.left: parent.left
-      anchors.top: botButton.bottom
+      anchors.top: questLogButton.bottom
       margin-left: 5
       margin-top: 3
       size: 20 20

@@ -235,7 +235,9 @@ function bindKeys()
 		g_game.cancelAttackAndFollow()
 	end, gameRootPanel)
 	g_keyboard.bindKeyDown("Ctrl+Q", function ()
-		tryLogout(false)
+		if modules.game_questlog then
+			g_game.requestQuestLog()
+		end
 	end, gameRootPanel)
 	g_keyboard.bindKeyDown("Ctrl+L", function ()
 		tryLogout(false)
@@ -1457,14 +1459,12 @@ function refreshViewMode()
 		gameMapPanel:setMarginLeft(0)
 		gameMapPanel:setMarginRight(0)
 		gameMapPanel:setMarginTop(0)
-	end
 
-	gameMapPanel:setVisibleDimension({
-		height = 11,
-		width = 15
-	})
+		gameMapPanel:setVisibleDimension({
+			height = 11,
+			width = 15
+		})
 
-	if classic then
 		g_game.changeMapAwareRange(19, 15)
 		gameMapPanel:addAnchor(AnchorLeft, "gameLeftActionPanel", AnchorRight)
 		gameMapPanel:addAnchor(AnchorRight, "gameRightActionPanel", AnchorLeft)
@@ -1526,6 +1526,11 @@ function updateSize()
 		local dimenstion = gameMapPanel:getVisibleDimension()
 		local dheight = dimenstion.height
 		local tileSize = rheight / dheight
+
+		-- Keep the aware range comfortably ahead of whatever the actual visible
+		-- area works out to be (depends on window aspect ratio), same buffer
+		-- margin classic view gets (19x15 aware vs 15x11 visible = +4 each side).
+		g_game.changeMapAwareRange(dimenstion.width + 8, dimenstion.height + 8)
 
 		gameMapPanel:setMarginTop(-tileSize)
 

@@ -5,8 +5,8 @@ DEFAULT_LAYOUT = "default" -- on android it's forced to "mobile", check code bel
 
 -- If you don't use updater or other service, set it to updater = ""
 Services = {
-  website = "http://tibiaotcv8.com", -- currently not used
-  updater = "http://tibiaotcv8.com/api/updater.php",
+  website = "https://backpackot.com",
+  updater = "https://backpackot.com/client/updater.php",
   stats = "",
   crash = "",
   feedback = "",
@@ -14,8 +14,8 @@ Services = {
 }
 
 Server = {
-    host = '127.0.0.1',
-    name = "Tibia Otcv8",
+    host = 'backpackot.com',
+    name = "BackpackOT",
     port = 7171,
     protocol = 860,
 }
@@ -25,7 +25,7 @@ Server = {
 --USE_NEW_ENERGAME = true -- uses entergamev2 based on websockets instead of entergame
 ALLOW_CUSTOM_SERVERS = false -- if true it shows option ANOTHER on server list
 
-g_app.setName("Tibia Otcv8")
+g_app.setName("BackpackOT")
 -- CONFIG END
 
 -- print first terminal message

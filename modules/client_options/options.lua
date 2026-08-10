@@ -139,7 +139,7 @@ function init()
 
 	subWindows.general = createSubWindow("generalWindow", tr("General Options"), "game", {
 		width = 250,
-		height = 380
+		height = 460
 	})
 	subWindows.graphics = createSubWindow("graphicsWindow", tr("Graphics"), "graphics", {
 		width = 270,
@@ -451,6 +451,22 @@ function setOption(key, value, force)
 	elseif key == "hdmodeBox" then
 		if g_sprites and g_sprites.setScaleFactor then
 			g_sprites.setScaleFactor(value and 2 or 1)
+		end
+	elseif key == "leftPanels" then
+		for _, win in pairs(subWindows) do
+			local label = win:recursiveGetChildById("leftPanelsLabel")
+
+			if label then
+				label:setText(tr("Left side panels: %d", value))
+			end
+		end
+	elseif key == "rightPanels" then
+		for _, win in pairs(subWindows) do
+			local label = win:recursiveGetChildById("rightPanelsLabel")
+
+			if label then
+				label:setText(tr("Right side panels: %d", value))
+			end
 		end
 	end
 

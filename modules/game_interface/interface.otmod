@@ -37,7 +37,6 @@ Module
     - game_stats
     - game_shaders
     - game_questlog
-    - game_bot
     - game_imbuing
     - game_market
     - game_supplystash
