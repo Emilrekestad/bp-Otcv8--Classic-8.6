@@ -16,3 +16,17 @@ data/things/
 
 # Local minimap cache from testing - regenerated per install, not source.
 data/minimap.otmm
+
+# Security audit 2026-10-05 (BackpackOT docs/security/SECRETS_INVENTORY.md).
+# This repository is PUBLIC. Nothing here holds a credential, but these keep
+# dated binary backups, local client settings (encrypted saved passwords live
+# in config.otml), and key files out of history.
+*.bak-*
+*.bak_*
+*.bak
+config.otml
+hotkeys*.otml
+.env
+.env.*
+*.pem
+*.key

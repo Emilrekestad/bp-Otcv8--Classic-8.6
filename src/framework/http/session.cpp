@@ -4,7 +4,27 @@
 #include <chrono>
 
 #include "session.h"
+#include "tlsverify.h"
+#include <framework/core/eventdispatcher.h>
 #include <string_view>
+
+// The first https:// connection builds the trust store (tlsverify.h): say once
+// in the client log what it holds. Info, or a warning if something is missing;
+// never an error (the startup updater treats any ERROR line as a failed check).
+static void logTrustStoreOnce()
+{
+    if (!tlsverify::firstUse())
+        return;
+    const tlsverify::Stats& stats = tlsverify::clientStats();
+    const std::string line = tlsverify::describe(stats);
+    const bool healthy = tlsverify::healthy(stats);
+    g_dispatcher.addEvent([line, healthy] {
+        if (healthy)
+            g_logger.info(line);
+        else
+            g_logger.warning(line);
+    });
+}
 
 void HttpSession::start() {
     if (m_result->redirects >= 10) {
@@ -67,13 +87,15 @@ void HttpSession::on_connect(const boost::system::error_code& ec) {
     if (ec)
         return onError("connection error", ec.message());
 
-    if (m_url.find("https") == 0 || m_url.find("HTTPS") == 0)
+    if (tlsverify::hasScheme(m_url, "https"))
     {
-        //m_context.set_options(boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::tlsv12_client);
-        m_context = std::make_shared< boost::asio::ssl::context >(boost::asio::ssl::context::tlsv12_client);
+        // The certificate must chain to a trusted root and be valid for this
+        // host (tlsverify.h; security finding SGM-5: this used to accept any
+        // certificate).
+        m_context = tlsverify::clientContext();
+        logTrustStoreOnce();
         m_ssl = std::make_shared<boost::asio::ssl::stream<boost::asio::ip::tcp::socket&>>(m_socket, *m_context);
-        m_ssl->set_verify_mode(boost::asio::ssl::verify_peer);
-        m_ssl->set_verify_callback([](bool, boost::asio::ssl::verify_context&) { return true; });         
+        tlsverify::requireHost(*m_ssl, m_domain);
 
         if(!SSL_set_tlsext_host_name(m_ssl->native_handle(), m_domain.c_str()))
         {
@@ -84,7 +106,7 @@ void HttpSession::on_connect(const boost::system::error_code& ec) {
         auto self(shared_from_this());
         m_ssl->async_handshake(boost::asio::ssl::stream_base::client, [&, self] (const boost::system::error_code& ec) {
             if (ec)
-                return onError("HTTPS handshake error", ec.message());
+                return onError("HTTPS handshake error", ec.message() + tlsverify::refusalSuffix(m_ssl->native_handle()));
 
             boost::beast::http::async_write(*m_ssl, m_request, 
                                      std::bind(&HttpSession::on_request_sent, shared_from_this(), std::placeholders::_1));
@@ -129,8 +151,12 @@ void HttpSession::on_read_header(const boost::system::error_code& ec, size_t byt
     auto location = msg["Location"];
 
     if ((m_result->status >= 300 && m_result->status < 400) && !location.empty()) {
+        std::string next(location);
+        // An answer that came over https never sends the client on to plain http.
+        if (m_ssl && !tlsverify::hasScheme(next, "https"))
+            return onError("Redirect from https to a non-https url refused", next);
         m_result->redirects++;
-        auto session = std::make_shared<HttpSession>(m_service, std::string(location), m_agent, m_requestData, m_result, m_callback);
+        auto session = std::make_shared<HttpSession>(m_service, next, m_agent, m_requestData, m_result, m_callback);
         session->start();
         return close();
     }

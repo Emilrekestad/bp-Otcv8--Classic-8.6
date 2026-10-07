@@ -600,6 +600,7 @@ if(FRAMEWORK_NET)
         ${CMAKE_CURRENT_LIST_DIR}/http/http.h
         ${CMAKE_CURRENT_LIST_DIR}/http/session.cpp
         ${CMAKE_CURRENT_LIST_DIR}/http/session.h
+        ${CMAKE_CURRENT_LIST_DIR}/http/tlsverify.h
         ${CMAKE_CURRENT_LIST_DIR}/http/websocket.cpp
         ${CMAKE_CURRENT_LIST_DIR}/http/websocket.h
         ${CMAKE_CURRENT_LIST_DIR}/http/result.h

@@ -729,6 +729,7 @@
     <ClInclude Include="..\src\framework\http\http.h" />
     <ClInclude Include="..\src\framework\http\result.h" />
     <ClInclude Include="..\src\framework\http\session.h" />
+    <ClInclude Include="..\src\framework\http\tlsverify.h" />
     <ClInclude Include="..\src\framework\http\websocket.h" />
     <ClInclude Include="..\src\framework\input\mouse.h" />
     <ClInclude Include="..\src\framework\luaengine\declarations.h" />

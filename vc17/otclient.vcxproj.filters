@@ -1091,6 +1091,9 @@
     <ClInclude Include="..\src\framework\http\websocket.h">
       <Filter>Header Files\framework\http</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\framework\http\tlsverify.h">
+      <Filter>Header Files\framework\http</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\framework\util\qrcodegen.h">
       <Filter>Header Files\framework\util</Filter>
     </ClInclude>

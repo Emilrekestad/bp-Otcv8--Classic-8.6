@@ -4,6 +4,7 @@
 #include <chrono>
 
 #include "websocket.h"
+#include "tlsverify.h"
 
 void WebsocketSession::start() {
     if (m_result->redirects >= 10) {
@@ -35,11 +36,12 @@ void WebsocketSession::start() {
     m_timer.expires_after(std::chrono::seconds(m_timeout));
     m_timer.async_wait(std::bind(&WebsocketSession::onTimeout, shared_from_this(), std::placeholders::_1));
 
-    if (m_url.find("wss") == 0 || m_url.find("WSS") == 0) {
-        m_context = std::make_shared< boost::asio::ssl::context >(boost::asio::ssl::context::tlsv12_client);
+    if (tlsverify::hasScheme(m_url, "wss")) {
+        // Same certificate and host name check as https:// (tlsverify.h;
+        // security finding SGM-5: this used to accept any certificate).
+        m_context = tlsverify::clientContext();
         m_ssl = std::make_shared<boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>>>(m_service, *m_context);
-        m_ssl->next_layer().set_verify_mode(boost::asio::ssl::verify_peer);
-        m_ssl->next_layer().set_verify_callback([](bool, boost::asio::ssl::verify_context&) { return true; });
+        tlsverify::requireHost(m_ssl->next_layer(), m_domain);
         if (!SSL_set_tlsext_host_name(m_ssl->next_layer().native_handle(), m_domain.c_str())) {
             boost::beast::error_code ec2(static_cast<int>(::ERR_get_error()), boost::asio::error::get_ssl_category());
             return onError("WSS error", ec2.message());
@@ -83,13 +85,11 @@ void WebsocketSession::on_connect(const boost::system::error_code& ec) {
     if (ec)
         return onError("connection error", ec.message());
 
-    if (m_url.find("wss") == 0 || m_url.find("WSS") == 0) {
-            //m_context.set_options(boost::asio::ssl::context::default_workarounds | boost::asio::ssl::context::tlsv12_client);
-
+    if (m_ssl) {
         auto self(shared_from_this());
         m_ssl->next_layer().async_handshake(boost::asio::ssl::stream_base::client, [&, self](const boost::system::error_code& ec) {
             if (ec)
-                return onError("WSS handshake error", ec.message());
+                return onError("WSS handshake error", ec.message() + tlsverify::refusalSuffix(m_ssl->next_layer().native_handle()));
 
             auto parsedUrl = parseURI(m_url);
             m_ssl->async_handshake(m_domain, parsedUrl.query, std::bind(&WebsocketSession::on_handshake, shared_from_this(), std::placeholders::_1));
