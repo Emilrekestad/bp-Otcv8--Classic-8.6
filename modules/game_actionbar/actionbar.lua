@@ -1,6 +1,17 @@
 local actionBars = {}
 local extraHotkeys = {}
 local settings = {}
+-- What the action bar has bound on the game panel: lower(combo) -> {combo, callback, widget}.
+-- Kept so a key is unbound exactly (the old code wiped every binding of the key,
+-- the Hotkeys window's included, and leaked bindings when bars were rebuilt).
+local boundActionKeys = {}
+-- A held key repeats ~30 times a second, and the server disconnects a client that
+-- sends more than 25 packets a second (config maxPacketsPerSecond). Repeats of a held
+-- action bar key run at most once per ACTION_REPEAT_MS, shared by all action bar keys,
+-- so holding two keys cannot double the rate. Spells and potions are exhausted for
+-- ~1 s anyway, so nothing is lost. The first press of a key always runs at once.
+local ACTION_REPEAT_MS = 200
+local lastRepeatRun = 0
 local settingsFile = ""
 local cachedSettings, window, mouseGrabberWidget = nil
 local TYPE = {
@@ -146,6 +157,8 @@ function offline()
 		end
 	end
 
+	unbindAllActionKeys()
+
 	for i, panel in ipairs(actionBars) do
 		panel:destroy()
 	end
@@ -171,6 +184,8 @@ function show()
 		actionbar:setOn(enabled)
 		setupActionBar(i)
 	end
+
+	notifyHotkeysWindow()
 end
 
 function refresh()
@@ -358,6 +373,8 @@ function setupActionBar(n)
 
 	actionbar.nextPanel.lock:setOn(not locked)
 	actionbar.nextPanel.lock.image:setOn(not locked)
+
+	unbindActionKeysOfBar(actionbar)
 
 	if not visible then
 		return actionbar.tabBar:destroyChildren()
@@ -682,6 +699,11 @@ function assignItem(widget)
 	end
 
 	local function okFunc(destroy)
+		if ItemsDatabase.isPotionOrRune(window.item:getItemId()) then
+			displayErrorBox(tr("Action Bar"), tr("Potions and runes cannot be assigned to action bar slots on this server."))
+			return
+		end
+
 		local hotkey = settings[widget:getId()] and settings[widget:getId()].hotkey
 
 		if hotkey and hotkey:len() > 0 and widget.callback then
@@ -1070,10 +1092,18 @@ function assignHotkey(widget)
 	window.display:setText(widget.hotkey or "")
 	window:grabKeyboard()
 
+	local baseDesc = window.desc:getText()
+
 	function window.onKeyDown(window, keyCode, keyboardModifiers)
 		local keyCombo = determineKeyComboDesc(keyCode, keyboardModifiers)
 
 		window.display:setText(keyCombo)
+
+		if modules.game_hotkeys and modules.game_hotkeys.isKeyComboUsed and modules.game_hotkeys.isKeyComboUsed(keyCombo) then
+			window.desc:setText(baseDesc .. "\n\n" .. tr("%s is also in the Hotkeys window. If you save, it is removed there.", keyCombo))
+		else
+			window.desc:setText(baseDesc)
+		end
 
 		return true
 	end
@@ -1092,6 +1122,7 @@ function assignHotkey(widget)
 
 		window:destroy()
 		setupButton(widget)
+		notifyHotkeysWindow()
 	end
 
 	local function clearFunc()
@@ -1120,6 +1151,7 @@ function assignHotkey(widget)
 	window.buttonOk.onClick = okFunc
 	window.buttonClear.onClick = clearFunc
 	window.buttonClose.onClick = closeFunc
+	window.onEscape = closeFunc
 	local actionbar = widget:getParent():getParent()
 
 	if actionbar.locked then
@@ -1160,6 +1192,7 @@ function assignAction(widget)
 
 	window.buttonOk.onClick = okFunc
 	window.buttonClose.onClick = closeFunc
+	window.onEscape = closeFunc
 
 	local function cancelFunc()
 		setupButton(widget)
@@ -1316,11 +1349,49 @@ function setupAction(widget)
 		end
 	end
 
+	-- A key press arrives as (widget, keyCode, ticks); a click on the slot calls
+	-- widget.callback() with no arguments. Only the key path is muted while the
+	-- player is typing, so one function still serves bind, unbind and click.
+	local runAction = widget.callback
+
+	if runAction then
+		function widget.callback(_, keyCode, ticks)
+			if keyCode and modules.game_console and modules.game_console.isTypingKey(widget.hotkey) then
+				return
+			end
+
+			-- ticks is how long the key has been held: 0 on the first press, more on repeats
+			if keyCode and ticks and ticks > 0 then
+				local now = g_clock.millis()
+
+				if now - lastRepeatRun < ACTION_REPEAT_MS then
+					return
+				end
+
+				lastRepeatRun = now
+			end
+
+			return runAction()
+		end
+	end
+
 	if widget.hotkey and widget.hotkey:len() > 0 and widget.callback then
 		local gameRootPanel = modules.game_interface.getRootPanel()
 
-		g_keyboard.unbindKeyPress(widget.hotkey, gameRootPanel)
+		local key = widget.hotkey:lower()
+		local old = boundActionKeys[key]
+
+		if old then
+			g_keyboard.unbindKeyPress(old.combo, old.callback, gameRootPanel)
+		end
+
 		g_keyboard.bindKeyPress(widget.hotkey, widget.callback, gameRootPanel)
+
+		boundActionKeys[key] = {
+			combo = widget.hotkey,
+			callback = widget.callback,
+			widget = widget
+		}
 	end
 end
 
@@ -1599,4 +1670,70 @@ function getBottomPanelHeight()
 	end
 
 	return rect
+end
+
+
+-- ---------------------------------------------------------------------------
+-- One key, one action (owner, 2026-10-10). The action bar and the Hotkeys
+-- window used to bind the same key on their own, so one press of F12 could
+-- cast two spells. Rule: a key on a button of a VISIBLE action bar belongs to
+-- the action bar. The Hotkeys window drops that key and will not add it
+-- (game_hotkeys: syncWithActionBar, isTakenByActionBar).
+-- ---------------------------------------------------------------------------
+function getUsedHotkeys()
+	local used = {}
+
+	for _, actionbar in ipairs(actionBars) do
+		if actionbar.tabBar and actionbar:isVisible() then
+			for _, button in ipairs(actionbar.tabBar:getChildren()) do
+				if button.hotkey and button.hotkey:len() > 0 then
+					used[button.hotkey:lower()] = button:getId()
+				end
+			end
+		end
+	end
+
+	return used
+end
+
+function isHotkeyUsed(keyCombo)
+	if not keyCombo or keyCombo:len() == 0 then
+		return false
+	end
+
+	return getUsedHotkeys()[keyCombo:lower()] ~= nil
+end
+
+function notifyHotkeysWindow()
+	if modules.game_hotkeys and modules.game_hotkeys.syncWithActionBar then
+		modules.game_hotkeys.syncWithActionBar()
+	end
+end
+
+function unbindActionKeysOfBar(actionbar)
+	if not actionbar.tabBar then
+		return
+	end
+
+	local gameRootPanel = modules.game_interface.getRootPanel()
+
+	for _, button in ipairs(actionbar.tabBar:getChildren()) do
+		for key, bound in pairs(boundActionKeys) do
+			if bound.widget == button then
+				g_keyboard.unbindKeyPress(bound.combo, bound.callback, gameRootPanel)
+
+				boundActionKeys[key] = nil
+			end
+		end
+	end
+end
+
+function unbindAllActionKeys()
+	local gameRootPanel = modules.game_interface.getRootPanel()
+
+	for key, bound in pairs(boundActionKeys) do
+		g_keyboard.unbindKeyPress(bound.combo, bound.callback, gameRootPanel)
+	end
+
+	boundActionKeys = {}
 end

@@ -38,6 +38,7 @@ hotkeysList = {}
 hotkeyConfigs = {}
 currentConfig = 1
 configValueChanged = false
+renameWindow = nil
 
 function init()
 	if not g_app.isMobile() then
@@ -104,6 +105,7 @@ function init()
 		hotkeyConfigs[i] = g_configs.create("/hotkeys_" .. i .. ".otml")
 	end
 
+	refreshConfigLabels()
 	load()
 end
 
@@ -114,6 +116,7 @@ function terminate()
 	})
 	g_keyboard.unbindKeyDown("Ctrl+K")
 	unload()
+	closeRenameWindow()
 	hotkeysWindow:destroy()
 
 	if hotkeysButton then
@@ -124,6 +127,7 @@ function terminate()
 end
 
 function online()
+	selectCharacterConfig()
 	reload()
 	hide()
 end
@@ -144,6 +148,7 @@ function show()
 end
 
 function hide()
+	closeRenameWindow()
 	hotkeysWindow:hide()
 end
 
@@ -165,11 +170,16 @@ function cancel()
 	hide()
 end
 
+-- One key, one action (2026-10-10): a key on the action bar is not also a hotkey here.
+function isTakenByActionBar(keyCombo)
+	return modules.game_actionbar and modules.game_actionbar.isHotkeyUsed and modules.game_actionbar.isHotkeyUsed(keyCombo) or false
+end
+
 function load(forceDefaults)
 	hotkeysManagerLoaded = false
 	currentConfig = 1
 	local hotkeysNode = g_settings.getNode("hotkeys") or {}
-	local index = g_game.getCharacterName() .. "_" .. g_game.getClientVersion()
+	local index = getCharacterKey()
 
 	if hotkeysNode[index] ~= nil and hotkeysNode[index] > 0 and hotkeysNode[index] <= #hotkeyConfigs then
 		currentConfig = hotkeysNode[index]
@@ -186,13 +196,17 @@ function load(forceDefaults)
 
 	hotkeyList = {}
 
+	local dropped = 0
+
 	if not forceDefaults and not table.empty(hotkeys) then
 		for keyCombo, setting in pairs(hotkeys) do
 			keyCombo = tostring(keyCombo)
 
-			addKeyCombo(keyCombo, setting)
-
-			hotkeyList[keyCombo] = setting
+			if addKeyCombo(keyCombo, setting) == false then
+				dropped = dropped + 1
+			else
+				hotkeyList[keyCombo] = setting
+			end
 		end
 	end
 
@@ -200,8 +214,17 @@ function load(forceDefaults)
 		loadDefautComboKeys()
 	end
 
+	updateConfigHint()
+
 	configValueChanged = false
 	hotkeysManagerLoaded = true
+
+	-- keys the action bar owns are dropped for good, not just hidden
+	if dropped > 0 then
+		configValueChanged = true
+
+		save()
+	end
 end
 
 function unload()
@@ -257,7 +280,7 @@ function save()
 	hotkeyConfigs[currentConfig]:setNode("hotkeys", hotkeySettings)
 	hotkeyConfigs[currentConfig]:save()
 
-	local index = g_game.getCharacterName() .. "_" .. g_game.getClientVersion()
+	local index = getCharacterKey()
 	local hotkeysNode = g_settings.getNode("hotkeys") or {}
 	hotkeysNode[index] = currentConfig
 
@@ -270,12 +293,178 @@ function onConfigChange()
 		return
 	end
 
-	local index = g_game.getCharacterName() .. "_" .. g_game.getClientVersion()
+	local index = getCharacterKey()
 	local hotkeysNode = g_settings.getNode("hotkeys") or {}
 	hotkeysNode[index] = configSelector.currentIndex
 
 	g_settings.setNode("hotkeys", hotkeysNode)
 	reload()
+end
+
+function getCharacterKey()
+	return g_game.getCharacterName() .. "_" .. g_game.getClientVersion()
+end
+
+-- Names are written into the .otml file, so keep them to what a Tibia name
+-- can hold. That also keeps "#" and "(" out, which is what keeps every
+-- combobox label unique (see refreshConfigLabels).
+function cleanConfigName(text)
+	text = tostring(text or ""):gsub("[^%w%s%-'%.]", "")
+	text = text:gsub("%s+", " ")
+	text = text:gsub("^ ", ""):gsub(" $", "")
+
+	return text
+end
+
+function getConfigName(index)
+	local config = hotkeyConfigs[index]
+
+	if not config then
+		return ""
+	end
+
+	return config:getValue("name")
+end
+
+-- The combobox popup selects an option by its TEXT, so two configs with the
+-- same name would both select the first. Duplicates carry their number.
+function refreshConfigLabels()
+	local counts = {}
+
+	for i = 1, #hotkeyConfigs do
+		local key = getConfigName(i):lower()
+		counts[key] = (counts[key] or 0) + 1
+	end
+
+	for i, option in ipairs(configSelector.options) do
+		local name = getConfigName(i)
+
+		if name == "" then
+			option.text = tr("Hotkeys config #%d", i)
+		elseif counts[name:lower()] > 1 then
+			option.text = string.format("%s (#%d)", name, i)
+		else
+			option.text = name
+		end
+	end
+
+	local current = configSelector:getCurrentOption()
+
+	if current then
+		configSelector:setText(current.text)
+	end
+end
+
+function findConfigByName(name)
+	local wanted = cleanConfigName(name):lower()
+
+	if wanted == "" then
+		return nil
+	end
+
+	for i = 1, #hotkeyConfigs do
+		if getConfigName(i):lower() == wanted then
+			return i
+		end
+	end
+
+	return nil
+end
+
+-- A config named after the character always wins at login. It is stored as
+-- the character's last-used config, so Cancel and Reset All stay on it, and
+-- switching by hand still works until the next login.
+function selectCharacterConfig()
+	local index = findConfigByName(g_game.getCharacterName())
+
+	if not index then
+		return
+	end
+
+	local hotkeysNode = g_settings.getNode("hotkeys") or {}
+	hotkeysNode[getCharacterKey()] = index
+
+	g_settings.setNode("hotkeys", hotkeysNode)
+end
+
+function openRenameWindow()
+	if renameWindow then
+		renameWindow:raise()
+		renameWindow:focus()
+
+		return
+	end
+
+	renameWindow = g_ui.createWidget("HotkeyRenameWindow", rootWidget)
+	renameWindow.configIndex = currentConfig
+	local nameEdit = renameWindow:getChildById("nameEdit")
+
+	nameEdit:setText(getConfigName(currentConfig))
+	nameEdit:setCursorPos(-1)
+	renameWindow:raise()
+	renameWindow:focus()
+	nameEdit:focus()
+end
+
+function closeRenameWindow()
+	if renameWindow then
+		renameWindow:destroy()
+
+		renameWindow = nil
+	end
+end
+
+function useCharacterName()
+	if not renameWindow then
+		return
+	end
+
+	local nameEdit = renameWindow:getChildById("nameEdit")
+
+	nameEdit:setText(g_game.getCharacterName())
+	nameEdit:setCursorPos(-1)
+	nameEdit:focus()
+end
+
+-- Saved at once: the name belongs to the config file, not to the hotkey
+-- edits that Ok/Cancel decide on.
+function confirmRename()
+	if not renameWindow then
+		return
+	end
+
+	local config = hotkeyConfigs[renameWindow.configIndex]
+	local name = cleanConfigName(renameWindow:getChildById("nameEdit"):getText())
+
+	-- Config:setValue appends a second node rather than replacing the old one
+	-- (OTMLNode::addChild), so the old name has to go first.
+	config:remove("name")
+	config:setValue("name", name)
+	config:save()
+	refreshConfigLabels()
+	updateConfigHint()
+	closeRenameWindow()
+end
+
+-- One line under the config box: a tip, or a confirmation when the config on
+-- screen is the one this character gets at login (the FIRST match, so a later
+-- duplicate still shows the tip).
+function updateConfigHint()
+	local hint = hotkeysWindow:getChildById("configHint")
+
+	if not hint then
+		return
+	end
+
+	local characterName = g_game.getCharacterName()
+
+	if characterName ~= "" and findConfigByName(characterName) == currentConfig then
+		hint:setText(tr("Loads when you log in with %s.", characterName))
+		hint:setColor("#c8c8c8")
+	else
+		hint:setText(tr("Tip: use your character's name to load it at login."))
+		hint:setColor("#9a9a9a")
+	end
 end
 
 function loadDefautComboKeys()
@@ -319,6 +508,16 @@ function onChooseItemMouseRelease(self, mousePosition, mouseButton)
 				item = clickedWidget:getItem()
 			end
 		end
+	end
+
+	if item and currentHotkeyLabel and ItemsDatabase.isPotionOrRune(item:getId()) then
+		show()
+		g_mouse.popCursor("target")
+		self:ungrabMouse()
+		-- Shown after show() (which raises hotkeysWindow) so the error box
+		-- ends up on top of it instead of landing behind it.
+		displayErrorBox(tr("Hotkeys"), tr("Potions and runes cannot be assigned to hotkeys on this server."))
+		return true
 	end
 
 	if item and currentHotkeyLabel then
@@ -383,6 +582,10 @@ end
 function addKeyCombo(keyCombo, keySettings, focus)
 	if keyCombo == nil or #keyCombo == 0 then
 		return
+	end
+
+	if isTakenByActionBar(keyCombo) then
+		return false
 	end
 
 	if not keyCombo then
@@ -502,7 +705,7 @@ function doKeyCombo(keyCombo, repeated)
 		return
 	end
 
-	if modules.game_console and modules.game_console.isChatEnabled() and keyCombo:len() == 1 then
+	if modules.game_console and modules.game_console.isTypingKey(keyCombo) then
 		return
 	end
 
@@ -853,6 +1056,17 @@ function hotkeyCapture(assignWindow, keyCode, keyboardModifiers)
 	local keyCombo = determineKeyComboDesc(keyCode, keyboardModifiers)
 	local comboPreview = assignWindow:getChildById("comboPreview")
 
+	if isTakenByActionBar(keyCombo) then
+		comboPreview:setText(tr("%s is on your action bar. Remove it there first.", keyCombo))
+
+		comboPreview.keyCombo = ""
+
+		comboPreview:resizeToText()
+		assignWindow:getChildById("addButton"):disable()
+
+		return true
+	end
+
 	comboPreview:setText(tr("Current hotkey to add: %s", keyCombo))
 
 	comboPreview.keyCombo = keyCombo
@@ -866,4 +1080,74 @@ end
 function hotkeyCaptureOk(assignWindow, keyCombo)
 	addKeyCombo(keyCombo, nil, true)
 	assignWindow:destroy()
+end
+
+
+-- True when this window has a hotkey on that key (the action bar's Edit Hotkey
+-- dialog asks, to warn before it takes the key over).
+function isKeyComboUsed(keyCombo)
+	if not keyCombo or keyCombo:len() == 0 or not currentHotkeys then
+		return false
+	end
+
+	for _, child in ipairs(currentHotkeys:getChildren()) do
+		if child.keyCombo and child.keyCombo:lower() == keyCombo:lower() then
+			return true
+		end
+	end
+
+	return false
+end
+
+-- Called by game_actionbar whenever its keys change. Every hotkey here whose
+-- key is now on the action bar is unbound and deleted, and the player is told.
+function syncWithActionBar()
+	if not hotkeysManagerLoaded or not currentHotkeys then
+		return
+	end
+
+	local gameRootPanel = modules.game_interface.getRootPanel()
+	local removed = {}
+
+	for _, child in ipairs(currentHotkeys:getChildren()) do
+		local keyCombo = child.keyCombo
+
+		if keyCombo and keyCombo:len() > 0 and isTakenByActionBar(keyCombo) then
+			if boundCombosCallback[keyCombo] then
+				g_keyboard.unbindKeyPress(keyCombo, boundCombosCallback[keyCombo], gameRootPanel)
+
+				boundCombosCallback[keyCombo] = nil
+			end
+
+			-- the Ctrl+ twin this window bound for it, unless Ctrl+key is a hotkey of its own
+			local ctrlCombo = "Ctrl+" .. keyCombo
+
+			if not keyCombo:lower():find("ctrl") and boundCombosCallback[ctrlCombo] and not currentHotkeys:getChildById(ctrlCombo) then
+				g_keyboard.unbindKeyPress(ctrlCombo, boundCombosCallback[ctrlCombo], gameRootPanel)
+
+				boundCombosCallback[ctrlCombo] = nil
+			end
+
+			hotkeyList[keyCombo] = nil
+
+			if currentHotkeyLabel == child then
+				currentHotkeyLabel = nil
+			end
+
+			child:destroy()
+
+			removed[#removed + 1] = keyCombo
+		end
+	end
+
+	if #removed > 0 then
+		configValueChanged = true
+
+		save()
+		updateHotkeyForm(true)
+
+		if modules.game_textmessage and modules.game_textmessage.displayStatusMessage then
+			modules.game_textmessage.displayStatusMessage(tr("%s is on your action bar now. It was removed from the Hotkeys window.", table.concat(removed, ", ")))
+		end
+	end
 end
