@@ -96,6 +96,7 @@ function init()
 	skillsWindow = g_ui.loadUI("skills", modules.game_interface.getRightPanel())
 	ProtocolGame.registerExtendedJSONOpcode(ExtendedIds.WheelSkills, onWheelSkillStats)
 	expLabel = skillsWindow:recursiveGetChildById("experience")
+	expLabel.onGeometryChange = fitExperienceLabel
 	local scrollbar = skillsWindow:getChildById("miniwindowScrollBar")
 
 	scrollbar:mergeStyle({
@@ -459,12 +460,32 @@ function formatLargeExp(value)
 	end
 end
 
+function fitExperienceLabel()
+	if not expLabel then
+		return
+	end
+
+	local name = expLabel:getChildById("name")
+	local value = expLabel:getChildById("value")
+	-- getTextSize measures the current text, so put the full word back before measuring
+	name:setText(tr("Experience"))
+
+	if name:getTextSize().width + value:getTextSize().width + 4 > expLabel:getWidth() then
+		name:setText(tr("Exp."))
+	end
+
+	-- The label does not resize itself, and the number's box starts at its right edge
+	name:setWidth(name:getTextSize().width)
+end
+
 function onExperienceChange(localPlayer, value)
 	if value < 0 then
 		return
 	end
 
-	setSkillValue("experience", formatLargeExp(value))
+	-- Full number like real Tibia; the label shortens to "Exp." when it does not fit
+	setSkillValue("experience", comma_value(value))
+	fitExperienceLabel()
 	addEvent(function ()
 		local localPlayer = g_game.getLocalPlayer()
 

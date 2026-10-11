@@ -53,6 +53,7 @@ MiniWindow
       id: experience
       height: 15
       SkillNameLabel
+        id: name
         !text: tr('Experience')
       SkillValueLabel
 
