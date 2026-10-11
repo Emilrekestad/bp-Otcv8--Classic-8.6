@@ -129,7 +129,7 @@ function terminate()
 		onGameStart = refresh,
 		onGameEnd = offline
 	})
-	g_keyboard.unbindKeyDown("Ctrl+S")
+	g_keyboard.unbindKeyDown("Ctrl+S", toggle) -- only our binding; game_walking also owns Ctrl+S (F15)
 	ProtocolGame.unregisterExtendedJSONOpcode(ExtendedIds.WheelSkills)
 	skillsWindow:destroy()
 end

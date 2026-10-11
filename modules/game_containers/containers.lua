@@ -87,6 +87,18 @@ function toggleContainerPages(containerWindow, hasPages)
 	end
 end
 
+-- Depot pages: the mouse wheel fires many events per notch, and each one used
+-- to send a page request, so a fast spin flooded the server. A wheel event is
+-- ignored for PAGE_WHEEL_GATE_MS after any page request from the same window.
+local PAGE_WHEEL_GATE_MS = 200
+
+local function seekContainerPage(container, firstIndex)
+	if container.window then
+		container.window.lastPageSeek = g_clock.millis()
+	end
+	g_game.seekInContainer(container:getId(), firstIndex)
+end
+
 function refreshContainerPages(container)
 	local currentPage = 1 + math.floor(container:getFirstIndex() / container:getCapacity())
 	local pages = 1 + math.floor(math.max(0, container:getSize() - 1) / container:getCapacity())
@@ -97,11 +109,12 @@ function refreshContainerPages(container)
 
 	if currentPage == 1 then
 		prevPageButton:setEnabled(false)
+		prevPageButton.onClick = nil
 	else
 		prevPageButton:setEnabled(true)
 
 		function prevPageButton.onClick()
-			g_game.seekInContainer(container:getId(), container:getFirstIndex() - container:getCapacity())
+			seekContainerPage(container, container:getFirstIndex() - container:getCapacity())
 		end
 	end
 
@@ -109,11 +122,12 @@ function refreshContainerPages(container)
 
 	if pages <= currentPage then
 		nextPageButton:setEnabled(false)
+		nextPageButton.onClick = nil
 	else
 		nextPageButton:setEnabled(true)
 
 		function nextPageButton.onClick()
-			g_game.seekInContainer(container:getId(), container:getFirstIndex() + container:getCapacity())
+			seekContainerPage(container, container:getFirstIndex() + container:getCapacity())
 		end
 	end
 
@@ -125,11 +139,17 @@ function refreshContainerPages(container)
 				return
 			end
 
-			if mouseWheel == MouseWheelUp then
-				return prevPageButton.onClick()
-			else
-				return nextPageButton.onClick()
+			local last = container.window and container.window.lastPageSeek
+			if last and g_clock.millis() - last < PAGE_WHEEL_GATE_MS then
+				return true
 			end
+
+			-- onClick is nil on the first and last page, so those send nothing.
+			local button = mouseWheel == MouseWheelUp and prevPageButton or nextPageButton
+			if button.onClick then
+				button.onClick()
+			end
+			return true
 		end
 	end
 end
@@ -143,6 +163,15 @@ function onContainerOpen(container, previousContainer)
 		previousContainer.itemsPanel = nil
 	else
 		containerWindow = g_ui.createWidget("ContainerWindow", modules.game_interface.getContainerPanel())
+
+		-- g_ui.createWidget() parents the window via C++ addChild, which skips
+		-- UIMiniWindow:setParent's Lua override - the only place that calls
+		-- fitOnParent()/fitAll() to shrink or close sibling windows so this one
+		-- fits within the panel's actual height. Without this, newly opened
+		-- loot windows just stack past the visible bottom of the screen,
+		-- especially now that the minimap bar permanently reserves a fixed
+		-- 280px at the top of the right side panels (see game_minimap/minimap.lua).
+		containerWindow:fitOnParent()
 
 		containerWindow:setBorderWidth(2)
 		containerWindow:setBorderColor("#FFFFFF")
@@ -265,7 +294,19 @@ function onContainerOpen(container, previousContainer)
 		end
 	end
 
-	if not previousContainer then
+	-- A depot box opening from the chest reuses the chest's 1-row window, so both
+	-- get a fixed starting height; the player can still drag either one.
+	local lowerName = container:getName():lower()
+	local defaultLines = nil
+	if lowerName == "depot chest" then
+		defaultLines = 1
+	elseif lowerName:find("^depot box") then
+		defaultLines = 2
+	end
+
+	if defaultLines then
+		containerWindow:setContentHeight(math.min(defaultLines, layout:getNumLines()) * (cellSize.height + 3))
+	elseif not previousContainer then
 		local filledLines = math.max(math.ceil(container:getItemsCount() / layout:getNumColumns()), 1)
 
 		containerWindow:setContentHeight(filledLines * (cellSize.height + 3))

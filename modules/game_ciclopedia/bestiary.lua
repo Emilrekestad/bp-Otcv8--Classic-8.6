@@ -628,7 +628,7 @@ if charmAmountBestiary then
 charmAmountBestiary:setText(amount)
 end
 if goldAmountBestiary then
-goldAmountBestiary:setText(secondAmount)
+goldAmountBestiary:setText(comma_value(secondAmount))
 end
 end
 
@@ -815,6 +815,7 @@ local function requestBestiaryInfo()
 	if protocolGame then
     local msg = OutputMessage.create()
     msg:addU8(CyclopediaOpcode.Info)
+    msg:addU8(1) -- which tab asked (bestiary tab); the server keys its cooldown on it, older servers ignore it
     protocolGame:send(msg)
 	end  
 

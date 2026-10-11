@@ -6,19 +6,60 @@ loaded = false
 oldZoom = nil
 oldPos = nil
 
-function init()
-	minimapWindow = g_ui.loadUI("minimap", modules.game_interface.getRightPanel())
+-- The minimap is permanently docked in gameRightMinimapBar, a fixed bar
+-- spanning both (hardcoded-to-2) right side panels, above them - see
+-- gameinterface.otui/gameinterface.lua. It's always this size, it can't be
+-- dragged, and there is no toggle for it.
+local FIXED_WIDTH = 351
+local FIXED_HEIGHT = 280
 
-	minimapWindow:setContentMinimumHeight(64)
-
-	if not minimapWindow.forceOpen then
-		minimapButton = modules.client_topmenu.addRightGameToggleButton("minimapButton", tr("Minimap") .. " (Ctrl+M)", "/images/topbuttons/minimap", toggle)
-
-		minimapButton:setOn(true)
+-- NonClosableMiniWindowContents (data/styles/30-miniwindow.otui) inherits an
+-- "anchors.right: miniwindowScrollBar.left" override from MiniWindowContents,
+-- but NonClosableMiniWindow never creates that scrollbar widget. That dangling
+-- reference freezes the content panel at whatever size it first resolved to
+-- instead of tracking the window's actual size. Force a clean re-fill instead
+-- of trusting that inherited anchor.
+local function refitMinimapContents()
+	local contentsPanel = minimapWindow:getChildById("contentsPanel")
+	if not contentsPanel then
+		return
 	end
+
+	contentsPanel:breakAnchors()
+	contentsPanel:fill("parent")
+end
+
+-- Party member roster, sent by tfs-source/data/scripts/globalevents/
+-- party_minimap_sync.lua every ~500ms while you're in a party (see
+-- gamelib/ui/uiminimap.lua's setPartyPositions() for the actual marker
+-- rendering, shared by any UIMinimap instance).
+local function onPartyPositions(protocol, opcode, roster)
+	if minimapWidget then
+		minimapWidget:setPartyPositions(roster)
+	end
+end
+
+function init()
+	local minimapBar = modules.game_interface.getRightMinimapBar()
+	minimapWindow = g_ui.loadUI("minimap", minimapBar)
 
 	minimapWidget = minimapWindow:recursiveGetChildById("minimap")
 	local gameRootPanel = modules.game_interface.getRootPanel()
+
+	minimapWindow:setup()
+	minimapWindow:open()
+
+	-- setup()/open() restore this window's *saved* parent from a previous
+	-- (pre-hardcoded) session - e.g. whichever GameSidePanel it used to be
+	-- docked in, which uses a verticalBox layout, not anchors. Force it back
+	-- onto the fixed minimap bar before applying anchors/fixed size.
+	minimapWindow:setParent(minimapBar)
+	minimapWindow:breakAnchors()
+	minimapWindow:fill("parent")
+	minimapWindow:setWidth(FIXED_WIDTH)
+	minimapWindow:setHeight(FIXED_HEIGHT)
+	minimapWindow:setDraggable(false)
+	refitMinimapContents()
 
 	g_keyboard.bindKeyPress("Alt+Left", function ()
 		minimapWidget:move(1, 0)
@@ -32,8 +73,6 @@ function init()
 	g_keyboard.bindKeyPress("Alt+Down", function ()
 		minimapWidget:move(0, -1)
 	end, gameRootPanel)
-	minimapWindow:setup()
-	minimapWindow:open()
 	connect(g_game, {
 		onGameStart = online,
 		onGameEnd = offline
@@ -41,6 +80,8 @@ function init()
 	connect(LocalPlayer, {
 		onPositionChange = updateCameraPosition
 	})
+
+	ProtocolGame.registerExtendedJSONOpcode(ExtendedIds.PartyPositions, onPartyPositions)
 
 	if g_game.isOnline() then
 		online()
@@ -59,6 +100,8 @@ function terminate()
 	disconnect(LocalPlayer, {
 		onPositionChange = updateCameraPosition
 	})
+
+	ProtocolGame.unregisterExtendedJSONOpcode(ExtendedIds.PartyPositions)
 
 	local gameRootPanel = modules.game_interface.getRootPanel()
 
@@ -108,6 +151,10 @@ end
 
 function offline()
 	saveMap()
+
+	if minimapWidget then
+		minimapWidget:clearPartyPositions()
+	end
 end
 
 function loadMap()
@@ -154,7 +201,12 @@ function loadMap()
 		print("Minimap couldn't be loaded, file missing?")
 	end
 
-	-- minimapWidget:load() -- This method does not exist in C++ UIMinimap
+	-- Marks and zoom. load() is Lua (gamelib/ui/uiminimap.lua), not C++.
+	-- This module is the one owner of the saved marks: it loads them here and
+	-- saves them in saveMap() at logout. With the load commented out, logout
+	-- saved an empty list over the player's marks. game_minimap_big sends its
+	-- marks to this widget so the save keeps them too.
+	minimapWidget:load()
 end
 
 function saveMap()

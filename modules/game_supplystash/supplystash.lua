@@ -319,6 +319,32 @@ local function unregisterProtocol()
 	protocolRegistered = false
 end
 
+-- A character change must not leave the last character's stash on screen
+-- (the stash window is locked, so it would also block the next login) or in
+-- memory. Same pattern as game_bazaar's onGameEnd: hide, then forget what
+-- belongs to the character who logged out. itemNameCache and itemInfoCache
+-- describe item types, not a character, so they stay.
+local function onGameEnd()
+	unregisterProtocol()
+
+	if window then
+		window:hide()
+		window:unlock()
+	end
+	if withdrawWindow then
+		withdrawWindow:hide()
+	end
+
+	currentItemData = {}
+	currentSizeLeft = 0
+	if supplyItems then
+		emptyItemList()
+	end
+	if freeSlots then
+		freeSlots:setText("")
+	end
+end
+
 function init()	
 	debugLog("init start")
 	
@@ -352,7 +378,7 @@ function init()
             onEnterGame = registerProtocol,
             onPendingGame = registerProtocol,
             onGameStart = registerProtocol,
-            onGameEnd = unregisterProtocol
+            onGameEnd = onGameEnd
         }
     )
 	
@@ -375,7 +401,7 @@ function terminate()
             onEnterGame = registerProtocol,
             onPendingGame = registerProtocol,
             onGameStart = registerProtocol,
-            onGameEnd = unregisterProtocol
+            onGameEnd = onGameEnd
         }
     )
 

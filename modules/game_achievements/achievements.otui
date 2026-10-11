@@ -1,0 +1,1067 @@
+// Achievements window.
+//
+// Same visual language as game_bao and game_bazaar -- layered dark surfaces,
+// the client's own 3-state button artwork, and one documented colour scale.
+// A player who has learned to read one of those three windows can read this
+// one without being taught anything new.
+//
+// ---------------------------------------------------------------------------
+// Design tokens (shared with bazaar.otui / bao.otui).
+//
+//   SURFACES   #262626  card cap / list ground (deepest)
+//              #2b2b2b  card ground, UNEARNED
+//              #333333  card ground, earned
+//              #3a3a3a  raised band (card footer, filter bar, header)
+//              #4a4a4a  hairline / divider
+//              #6a6a6a  border on interactive elements
+//
+//   TEXT       #f6f1e2  primary   (earned achievement names)
+//              #c8c8c8  secondary (labels, controls)
+//              #9a9a9a  tertiary  (meta, counts, rarity)
+//              #7a7a7a  unearned name
+//              #5f5f5f  unearned body text
+//
+//   ACCENT     #f0c674  points gold -- used ONLY for an achievement-point value
+//              #8fd97f  earned green -- used ONLY to say "you have this"
+//              #e8825c  ember -- used ONLY for "nobody on this server has
+//                       earned this yet", the single most interesting fact
+//                       this window can tell a player
+//
+//   DIFFICULTY #3f6b3a  Easy      (dim #2c4a29)
+//              #2f5a7d  Medium    (dim #223f57)
+//              #7a2c2c  Hard      (dim #4f1d1d)
+//
+// Difficulty is the one place a fourth hue enters, and it is carried on a 3px
+// rail and a chip -- never on text. That keeps it readable as a category
+// rather than competing with the three accents, which all mean something.
+//
+// Spacing is a 4px rhythm: 4 / 6 / 10 / 16.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Surfaces. Not colours -- the CLIENT's own assets, the same three every other
+// window in this codebase is built from (see docs/client-ui-guide.md). What
+// was here before was a palette of flat fills inside 1px borders, which is a
+// wireframe: Tibia's interface has no flat rectangles in it anywhere, so a
+// window made of them reads as a web page rendered inside a game.
+//
+// The one deliberate exception is HsPlaque / HsFace further down. That is the
+// showcase plaque, and it is meant to be the single thing on the page wearing
+// a material nothing else has.
+// ---------------------------------------------------------------------------
+
+// (!) THE DEPTH STACK. Measured, not chosen by eye. image-color MULTIPLIES the
+// asset, so the number in a style is not the colour you get -- what you get is
+// (asset centre x tint). Outermost to innermost:
+//
+//   #444444  the client's own window ground (/images/ui/window), the datum
+//   #2c2c2c  list container   panel_flat x #a4a4a4   sunken
+//   #414141  card / panel     2px-light  x #f0f0f0   raised
+//   #353535  well inside it   panel_flat x #c4c4c4   sunken
+//   #1a1a1a  slot / groove    item.png   x #b4b4b4   items and meters ONLY
+//
+// This replaced a stack of #2a card / #17 well built on the DARK 2-pixel frame
+// and on item.png -- the inventory weave, the darkest surface the client
+// ships. Individually each looked deliberate; together they made a window
+// three steps darker than the game around it. item.png is right behind an ITEM
+// and behind a progress groove, and wrong everywhere else.
+
+// RAISED. The client's 2-pixel up-frame in its LIGHT weight.
+AchPlate < Panel
+  image-source: /images/ui/2pixel-up-frame-borderimage
+  image-border: 2
+  image-color: #f0f0f0
+
+// SUNKEN, GREY. corelib's FlatPanel asset. A card's cap band sits IN it.
+AchWell < Panel
+  image-source: /images/ui/panel_flat
+  image-border: 1
+  image-color: #c4c4c4
+
+// A GROOVE. A ProgressBar paints its background-color AS THE FILL, so the
+// track under it has to be genuinely dark for the fill to read.
+AchGroove < Panel
+  image-source: /images/ui/item
+  image-border: 1
+  image-color: #9c9c9c
+
+// A rule -- the client's own separator artwork, a dark groove over a light
+// highlight, so it reads as engraved into the surface rather than drawn on
+// top of it. Same asset corelib's HorizontalSeparator uses.
+AchSep < UIWidget
+  height: 2
+  image-source: /images/ui/separator_horizontal
+  image-border: 1
+  phantom: true
+  focusable: false
+
+// (!) No fill. This was a filled pill, and with the grade, Secret and
+// Showcased all wearing one, a single card could carry six coloured objects --
+// three pills, gold points, a green earned-date and an amber rarity line --
+// before the rail. Fifteen of those on screen is a colour field, not a list.
+//
+// Tibia states things with COLOURED TEXT on grey, and it spends colour once.
+// The chip is now a word: the grade keeps its colour, everything else is grey,
+// and the rail down the card's left edge carries the same grade colour so the
+// grid is still scannable by difficulty at arm's length.
+AchChip < Label
+  height: 14
+  font: verdana-11px-monochrome
+  color: #c8c8c8
+  text-align: left
+  phantom: true
+
+// ProgressBar paints its own background-color AS THE FILL, scaled by percent --
+// there is no separate track colour -- so the dark groove behind one has to
+// come from the panel it sits on.
+AchMeter < ProgressBar
+  height: 5
+  background-color: #f0c674
+
+AchPointsBar < ProgressBar
+  height: 16
+  background-color: #6f9e58
+  font: verdana-11px-monochrome
+
+// (!) /images/ui/buttons, not button_rounded, and no brass tint. Same change
+// and same reasoning as game_store's StoreButton -- these windows share one
+// chrome and these styles are copies of each other. This was the last
+// button_rounded left in the codebase.
+//
+// button_rounded is a smooth grey gradient: the one control in the window made
+// of no material while every panel around it is textured slate. The brass tint
+// also put window chrome in the same colour as the showcase plaque, so a
+// utility wore the accent that is supposed to mean "this is the showcased
+// one".
+//
+// /images/ui/buttons is what data/styles/10-buttons.otui puts on every button
+// in this client: 43x40 as two states of 20 -- normal at y=0, pressed at y=20
+// -- 9-sliced at image-border 3 so the noise tiles at any width. The native
+// style reuses the normal clip for $hover because real Tibia buttons do not
+// light up; this one does, through image-color, which is why rest is #d8d8d8
+// rather than full brightness (image-color MULTIPLIES).
+AchButton < UIButton
+  height: 21
+  font: verdana-11px-monochrome
+  image-source: /images/ui/buttons
+  image-clip: 0 0 43 20
+  image-border: 3
+  image-color: #d8d8d8
+  color: #e8e8e8
+  text-offset: 0 1
+  change-cursor-image: true
+  cursor: pointer
+
+  $hover !disabled:
+    image-color: #ffffff
+    color: #ffffff
+
+  $pressed:
+    image-clip: 0 20 43 20
+    text-offset: 1 2
+
+  $disabled:
+    image-color: #7d7d7d
+    color: #9a9a9a
+    change-cursor-image: false
+
+// A read-out plate in the header. Solid, not phantom: Panel is phantom:true by
+// default, so the plate would never receive the mouse and its tooltip could
+// never fire -- and every figure in this header needs to explain itself.
+AchBalance < FlatPanel
+  image-color: #9a9a9a
+  height: 21
+  focusable: false
+  phantom: false
+
+  Label
+    id: value
+    anchors.fill: parent
+    margin-left: 8
+    margin-right: 8
+    text-align: right
+    text: 0
+    font: verdana-11px-rounded
+    color: #f6f1e2
+
+  Label
+    id: caption
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 8
+    font: verdana-11px-monochrome
+    color: #9a9a9a
+    phantom: true
+
+// ---------------------------------------------------------------------------
+// Difficulty read-out.
+//
+// Three of these across the bottom of the header answer "how am I doing" for
+// the whole catalogue without scrolling a single card -- which is the entire
+// reason the header is two rows tall instead of one.
+// ---------------------------------------------------------------------------
+AchGradeMeter < Panel
+  height: 28
+  phantom: true
+
+  Label
+    id: caption
+    anchors.top: parent.top
+    anchors.left: parent.left
+    font: verdana-11px-monochrome
+    color: #c8c8c8
+    text-auto-resize: true
+
+  Label
+    id: count
+    anchors.top: parent.top
+    anchors.right: parent.right
+    text-align: right
+    font: verdana-11px-monochrome
+    color: #9a9a9a
+    text-auto-resize: true
+
+  // The groove a meter runs in. ProgressBar paints its background-color AS
+  // THE FILL, so the track behind it has to be a real surface underneath.
+  AchGroove
+    id: track
+    height: 5
+    anchors.bottom: parent.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-bottom: 4
+
+    AchMeter
+      id: bar
+      anchors.fill: parent
+
+// ---------------------------------------------------------------------------
+// The card.
+//
+// Reads in one glance, top to bottom: what kind of thing this is (rail and
+// chip), what it is worth (gold, right of the cap), what it is (name), what it
+// asks of you (description), how rare it is and whether you have it (footer).
+//
+// An unearned card is the same card dimmed, never a different card. Players
+// scan a grid by shape; changing the shape for locked entries would make the
+// grid unreadable at the exact density this window is built for.
+// ---------------------------------------------------------------------------
+AchCard < AchPlate
+  size: 288 122
+  focusable: false
+  phantom: false
+  // Base state is UNEARNED: the same frame, dimmed. See the note in
+  // achievements.lua's fillCard for why earned and showcased are widget STATES
+  // here rather than colours set from Lua.
+  image-color: #b0b0b0
+
+  // Earned.
+  $on:
+    image-color: #f0f0f0
+
+  // Showcased -- brighter still, warmed toward the plaque. Declared after $on
+  // because a showcased card is also earned and both blocks match; the later
+  // one wins for the tags they share.
+  $checked:
+    image-color: #ffe8b8
+
+  // Declared last so hovering wins over both. image-color MULTIPLIES, which is
+  // why no resting state sits at full brightness.
+  $hover:
+    image-color: #ffffff
+
+  Panel
+    id: rail
+    width: 3
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    anchors.left: parent.left
+    background-color: #3f6b3a
+    phantom: true
+
+  AchWell
+    id: cap
+    height: 20
+    anchors.top: parent.top
+    anchors.left: rail.right
+    anchors.right: parent.right
+    phantom: true
+
+    AchChip
+      id: grade
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 7
+
+    AchChip
+      id: secret
+      anchors.left: prev.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 8
+      color: #9a9a9a
+      text: Secret
+      visible: false
+
+    Label
+      id: points
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 9
+      font: verdana-11px-rounded
+      color: #f0c674
+      text-auto-resize: true
+
+    // (!) Anchored to `points`, not to the chips on the left. `secret` is
+    // hidden on most cards, and a hidden widget keeps its rect -- anchoring a
+    // chain to it would leave a gap on every non-secret card.
+    AchChip
+      id: showcase
+      anchors.right: points.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 8
+      text-align: right
+      color: #c8c8c8
+      text: Showcased
+      visible: false
+
+  Label
+    id: name
+    height: 15
+    anchors.top: cap.bottom
+    anchors.left: rail.right
+    anchors.right: parent.right
+    margin-top: 6
+    margin-left: 10
+    margin-right: 10
+    font: verdana-11px-rounded
+    color: #f6f1e2
+
+  // (!) Anchored top AND bottom rather than given a height. The descriptions
+  // range from one line to five; a fixed height would either clip the long
+  // ones or leave a hole under the short ones.
+  Label
+    id: description
+    anchors.top: name.bottom
+    anchors.left: rail.right
+    anchors.right: parent.right
+    anchors.bottom: footRule.top
+    margin-top: 3
+    margin-left: 10
+    margin-right: 10
+    margin-bottom: 4
+    text-wrap: true
+    font: verdana-11px-monochrome
+    color: #8f8f8f
+
+  AchSep
+    id: footRule
+    anchors.bottom: foot.top
+    anchors.left: rail.right
+    anchors.right: parent.right
+
+  // The footer is a sunken band, the same surface as the cap above it. That
+  // gives the card the shape a Tibia record has -- a header strip, a raised
+  // face carrying the text, and a footer strip -- rather than one open panel
+  // with lines drawn across it.
+  AchWell
+    id: foot
+    height: 22
+    anchors.bottom: parent.bottom
+    anchors.left: rail.right
+    anchors.right: parent.right
+    phantom: true
+
+    Label
+      id: rarity
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 10
+      font: verdana-11px-monochrome
+      color: #9a9a9a
+      text-auto-resize: true
+
+    Label
+      id: status
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 10
+      text-align: right
+      font: verdana-11px-monochrome
+      color: #8fd97f
+      text-auto-resize: true
+
+// ---------------------------------------------------------------------------
+
+
+// ---------------- highscores ----------------
+//
+// The blend the brief asked for: the CLIENT keeps its dark stone panels and
+// its own button sprite, and what comes across from the website is the gold
+// bevel around a recessed face and the lit-gold numeral inside it. That is the
+// same plaque the character page's Achievement showcase wears, translated to a
+// dark surface -- a cream face that works on parchment would be a hole punched
+// in this window.
+
+HsPlaque < Panel
+  background-color: #a8925e
+  padding: 2
+
+HsFace < Panel
+  background-color: #2f2a1d
+  border-width: 1
+  border-color: #6b5a34
+
+// A board key. AchButton carries the hover, pressed and disabled states and the
+// gold image tint, so a board button is that button at list scale -- plus the
+// one state it does NOT define. AchButton has no $checked, so setChecked() on
+// a plain AchButton changes nothing at all and the open board would look
+// identical to the eleven you are not on. This adds it, reusing the pressed
+// sprite and its 1px text drop so "current" reads as held down.
+HsBoardButton < AchButton
+  height: 20
+  margin-right: 4
+
+  // The gold stays HERE and nowhere else on a button: "this is the board you
+  // are looking at" is the one button state in this window worth an accent.
+  $checked:
+    image-clip: 0 20 43 20
+    image-color: #f0c674
+    color: #ffffff
+    text-offset: 1 2
+
+// One ranked line. Built in Lua by the dozen, so every column is a fixed
+// anchor rather than a layout -- a grid layout here would relayout the whole
+// list on each fill.
+HsRow < UIWidget
+  height: 22
+  focusable: false
+  phantom: false
+
+  Label
+    id: rank
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 8
+    width: 46
+    text-align: right
+    font: verdana-11px-monochrome
+    color: #9a9a9a
+
+  Label
+    id: value
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-right: 10
+    width: 120
+    text-align: right
+    font: verdana-11px-antialised
+    color: #f0c674
+
+  Label
+    id: extra
+    anchors.right: value.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-right: 16
+    width: 150
+    text-align: right
+    font: verdana-11px-monochrome
+    color: #9a9a9a
+
+  Label
+    id: name
+    anchors.left: rank.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 14
+    width: 220
+    font: verdana-11px-antialised
+    color: #dfdfdf
+
+  Label
+    id: vocation
+    anchors.left: name.right
+    anchors.right: extra.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 8
+    margin-right: 8
+    font: verdana-11px-monochrome
+    color: #7f7f7f
+
+HsTabPanel < Panel
+
+  // Board keys on the left, the two choosers on the right -- the same
+  // arrangement the website settled on, so a player who knows one knows the
+  // other.
+  AchPlate
+    id: boardBar
+    height: 31
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+
+    ComboBox
+      id: vocationFilter
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 10
+      width: 132
+
+    ComboBox
+      id: skillFilter
+      anchors.right: prev.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 6
+      width: 132
+
+    Panel
+      id: boardButtons
+      anchors.left: parent.left
+      anchors.right: skillFilter.left
+      anchors.verticalCenter: parent.verticalCenter
+      height: 20
+      margin-left: 8
+      margin-right: 10
+      layout:
+        type: horizontalBox
+
+  // The leader. Hidden entirely when the top score is zero or tied -- see the
+  // note in achievements_protocol.lua for why crowning an arbitrary one of
+  // five characters on zero is worse than crowning nobody.
+  HsPlaque
+    id: champPlate
+    height: 96
+    anchors.top: boardBar.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 8
+
+    HsFace
+      id: champFace
+      anchors.fill: parent
+
+      // The window's real advantage over the website: this is the live outfit,
+      // drawn by the client, not a 64x64 GIF fetched from an image service.
+      Creature
+        id: champCreature
+        size: 72 72
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        margin-left: 10
+
+      Label
+        id: champEyebrow
+        anchors.top: parent.top
+        anchors.left: champCreature.right
+        margin-top: 14
+        margin-left: 14
+        font: verdana-11px-monochrome
+        color: #8a7a55
+        text-auto-resize: true
+        text: RANK 1
+
+      // (!) Verdana Bold-16px. data/fonts declares exactly one large Verdana,
+      // and naming a face that does not exist does not error -- it silently
+      // falls back to the 11px default, which is what once made a "big" number
+      // render at body size with its caption sitting at the wrong height.
+      Label
+        id: champName
+        anchors.top: prev.bottom
+        anchors.left: prev.left
+        margin-top: 2
+        font: Verdana Bold-16px
+        color: #f0c674
+        text-auto-resize: true
+
+      Label
+        id: champSub
+        anchors.top: prev.bottom
+        anchors.left: prev.left
+        margin-top: 3
+        font: verdana-11px-monochrome
+        color: #9a9a9a
+        text-auto-resize: true
+
+      Label
+        id: champValue
+        anchors.top: parent.top
+        anchors.right: parent.right
+        margin-top: 18
+        margin-right: 16
+        font: Verdana Bold-16px
+        color: #f0c674
+        text-align: right
+        text-auto-resize: true
+
+      Label
+        id: champUnit
+        anchors.top: prev.bottom
+        anchors.right: prev.right
+        margin-top: 2
+        font: verdana-11px-monochrome
+        color: #8a7a55
+        text-align: right
+        text-auto-resize: true
+
+  // Column headings, so the number on the right is never unlabelled.
+  AchPlate
+    id: hsHead
+    height: 20
+    anchors.top: champPlate.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 8
+
+    Label
+      id: headRank
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 8
+      width: 46
+      text-align: right
+      font: verdana-11px-monochrome
+      color: #f6f1e2
+      text: Rank
+
+    Label
+      id: headValue
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 10
+      width: 120
+      text-align: right
+      font: verdana-11px-monochrome
+      color: #f6f1e2
+
+    Label
+      id: headExtra
+      anchors.right: headValue.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 16
+      width: 150
+      text-align: right
+      font: verdana-11px-monochrome
+      color: #f6f1e2
+
+    Label
+      id: headName
+      anchors.left: headRank.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 14
+      font: verdana-11px-monochrome
+      color: #f6f1e2
+      text: Character
+
+  ScrollablePanel
+    id: rowList
+    // Sunken: a card built out of the same slate as the panel behind it has
+    // only its 2px bevel to separate the two. (!) Image only, no padding --
+    // the module computes this list's row geometry by hand.
+    image-source: /images/ui/panel_flat
+    image-border: 1
+    image-color: #a4a4a4
+    auto-focus: none
+    anchors.top: hsHead.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: youPlate.top
+    margin-top: 2
+    margin-right: 14
+    margin-bottom: 8
+    vertical-scrollbar: rowScroll
+    layout:
+      type: verticalBox
+      spacing: 1
+
+  VerticalScrollBar
+    id: rowScroll
+    anchors.top: rowList.top
+    anchors.bottom: rowList.bottom
+    anchors.right: parent.right
+    step: 22
+    pixels-scroll: true
+
+  Label
+    id: hsNotice
+    anchors.fill: rowList
+    visible: false
+    text-align: center
+    text-wrap: true
+    font: verdana-11px-rounded
+    color: #9a9a9a
+
+  // Where the viewer stands, pinned. The one thing this window can say that
+  // the website cannot, because it knows who is looking.
+  AchPlate
+    id: youPlate
+    height: 24
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+
+    Label
+      id: youText
+      anchors.fill: parent
+      margin-left: 10
+      margin-right: 10
+      text-align: left
+      font: verdana-11px-monochrome
+      color: #9a9a9a
+
+// The achievements tab: every widget below is exactly what used to hang off
+// AchWindow directly, moved one level down so the tab bar can swap it out.
+// recursiveGetChildById in achievements.lua reaches through the extra level
+// unchanged, which is why the Lua needed no lookup rewrites.
+AchTabPanel < Panel
+  // ---------------- header ----------------
+  AchPlate
+    id: header
+    height: 108
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+
+    // (!) Verdana Bold-16px, not a 22px face. data/fonts declares exactly one
+    // large Verdana -- 16px -- and naming a font that does not exist does not
+    // error, it silently falls back to the default 11px face. That is what
+    // made this number render at body size with the "of 1,058" beside it
+    // sitting at the wrong height: the two labels were bottom-aligned for a
+    // 22px box that was never 22px tall.
+    Label
+      id: pointsValue
+      anchors.top: parent.top
+      anchors.left: parent.left
+      margin-top: 10
+      margin-left: 16
+      font: Verdana Bold-16px
+      color: #f0c674
+      text-auto-resize: true
+      text: 0
+
+    // Bottom-anchored, which is what puts two different type sizes on a shared
+    // baseline. text-auto-resize on both sides is what makes that hold -- each
+    // box is exactly its own text, so aligning the boxes aligns the text.
+    Label
+      id: pointsOf
+      anchors.left: prev.right
+      anchors.bottom: prev.bottom
+      margin-left: 6
+      font: verdana-11px-rounded
+      color: #9a9a9a
+      text-auto-resize: true
+
+    Label
+      id: pointsCaption
+      anchors.top: pointsValue.bottom
+      anchors.left: pointsValue.left
+      margin-top: 1
+      font: verdana-11px-monochrome
+      color: #9a9a9a
+      text-auto-resize: true
+      text: Achievement Points
+
+    AchBalance
+      id: unlockedPlate
+      size: 152 21
+      anchors.top: parent.top
+      anchors.right: parent.right
+      margin-top: 11
+      margin-right: 16
+
+    AchBalance
+      id: secretsPlate
+      size: 152 21
+      anchors.top: prev.bottom
+      anchors.right: prev.right
+      margin-top: 5
+
+    // Row two. Three meters, equal thirds of the band -- the whole catalogue
+    // summarised in one line of the header.
+    AchGradeMeter
+      id: gradeEasy
+      width: 276
+      anchors.bottom: parent.bottom
+      anchors.left: parent.left
+      margin-bottom: 8
+      margin-left: 16
+
+    AchGradeMeter
+      id: gradeMedium
+      width: 276
+      anchors.bottom: prev.bottom
+      anchors.left: prev.right
+      margin-left: 16
+
+    AchGradeMeter
+      id: gradeHard
+      width: 276
+      anchors.bottom: prev.bottom
+      anchors.left: prev.right
+      margin-left: 16
+
+  // ---------------- filter bar ----------------
+  AchPlate
+    id: filterBar
+    height: 33
+    anchors.top: header.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 8
+    margin-right: 14
+
+    Label
+      id: searchLabel
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 12
+      !text: tr('Search')
+      font: verdana-11px-antialised
+      color: #f6f1e2
+
+    TextEdit
+      id: searchEdit
+      anchors.left: prev.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 8
+      width: 168
+      height: 20
+
+    Label
+      id: showLabel
+      anchors.left: prev.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 16
+      !text: tr('Show')
+      font: verdana-11px-antialised
+      color: #f6f1e2
+
+    ComboBox
+      id: showFilter
+      anchors.left: prev.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 8
+      width: 128
+
+    Label
+      id: sortLabel
+      anchors.left: prev.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 16
+      !text: tr('Sort')
+      font: verdana-11px-antialised
+      color: #f6f1e2
+
+    ComboBox
+      id: sortMode
+      anchors.left: prev.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 8
+      width: 140
+
+    Label
+      id: shownCount
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      margin-right: 12
+      text-align: right
+      font: verdana-11px-monochrome
+      color: #9a9a9a
+      text-auto-resize: true
+
+  // ---------------- cards ----------------
+  //
+  // (!) No `vertical-scrollbar` binding, on purpose -- achievements.lua drives
+  // cardScroll itself.
+  //
+  // This panel holds a POOL of about fifteen cards, not one per achievement,
+  // and the module slides them with the panel's virtual offset. Binding the
+  // bar the normal way would have UIScrollArea:updateScrollBars size its range
+  // from getChildrenRect, i.e. from those fifteen cards -- one screenful --
+  // and the bar would report that there is nothing to scroll. The module sets
+  // the range from the real row count instead. See the "Virtual list geometry"
+  // note in achievements.lua for why the list is pooled at all.
+  //
+  // It stays a ScrollablePanel rather than a Panel for the clipping and for
+  // the mouse handling; Panel is phantom, and a phantom list never sees the
+  // wheel.
+  ScrollablePanel
+    id: cardList
+    // Sunken: a card built out of the same slate as the panel behind it has
+    // only its 2px bevel to separate the two. (!) Image only, no padding --
+    // the module computes this list's row geometry by hand.
+    image-source: /images/ui/panel_flat
+    image-border: 1
+    image-color: #a4a4a4
+    auto-focus: none
+    anchors.top: filterBar.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-top: 8
+    margin-right: 14
+    margin-bottom: 6
+    layout:
+      type: grid
+      cell-size: 288 122
+      cell-spacing: 6
+      num-columns: 3
+
+  // (!) Starts at an empty range rather than the UIScrollBar default of
+  // -999999..999999. The module hands it a real range once it knows how many
+  // rows there are; until then an empty range is what keeps the bar switched
+  // off, so a wheel over the list cannot scroll a list that is not there yet.
+  VerticalScrollBar
+    id: cardScroll
+    anchors.top: cardList.top
+    anchors.bottom: cardList.bottom
+    anchors.right: parent.right
+    minimum: 0
+    maximum: 0
+    step: 32
+    pixels-scroll: true
+
+  // (!) Declared here as a SIBLING of the list, not built inside it. A widget
+  // parented to a grid-layout panel is resized to the cell size, so a
+  // full-width notice created in Lua would be squeezed into one 288px card
+  // slot and read as a broken card rather than as a message.
+  Label
+    id: emptyNotice
+    anchors.fill: cardList
+    visible: false
+    text-align: center
+    text-wrap: true
+    font: verdana-11px-rounded
+    color: #9a9a9a
+
+
+// ---------------- tabs ----------------
+//
+// The default TabBarButton is 18px of sprite sized to its text, which reads as
+// a form control rather than as the two halves of the window. These are 34px
+// with an icon, so the choice is the first thing the eye lands on.
+//
+// (!) UITabBar derives its children's style names from its OWN style name:
+// `getStyleName() .. "Button"` and `.. "Panel"`. Renaming the bar to
+// RecordsTabBar is therefore what selects RecordsTabBarButton below -- the two
+// names are coupled, so neither can be renamed alone.
+//
+// The 9-slice (`image-border: 3`) is what lets an 18px-tall sprite stretch to
+// 34 without the end caps smearing.
+RecordsTabBar < TabBar
+  height: 36
+  Panel
+    id: buttonsPanel
+    anchors.fill: parent
+
+RecordsTabBarPanel < Panel
+
+RecordsTabBarButton < TabBarButton
+  height: 34
+  // (!) THE CLIP IS 96 WIDE HERE, NOT THE BASE STYLE'S 98. tabbutton_square.png
+  // is 96x57, so TabBarButton's `image-clip: 0 0 98 18` runs two columns off
+  // the right edge of its own texture. That pushes the 9-slice's right border
+  // out of bounds and leaves the art's real dark right-edge column (x=94-95)
+  // inside the STRETCHED middle instead -- so it gets dragged inwards and drawn
+  // as a stray dark vertical line across the tab. A stock 20px-wide tab hides
+  // it a pixel from the edge; at this tab's ~120-140px it lands in open space.
+  // Clipping to the texture's true width pins that edge back where it belongs.
+  image-clip: 0 0 96 18
+  padding-top: 0
+  padding-bottom: 0
+  // (!) The width comes from these. UITabBar:addTab sizes a tab to
+  // `textSize + paddingLeft + paddingRight` and knows nothing about the icon,
+  // so the icon's room has to BE the left padding -- 12 to the glyph, 20 of
+  // glyph, 6 of gap. Getting this wrong is what put the label under its own
+  // icon; it is not something to patch up with setWidth afterwards.
+  padding-left: 38
+  padding-right: 16
+  font: verdana-11px-antialised
+  color: #b9b9b9
+
+  // (!) PADDING DOES NOT MOVE THE TEXT. UIWidget::drawText builds its rect
+  // from the widget's FULL screen coords plus text-offset
+  // (uiwidgettext.cpp:119) -- padding only feeds the auto-size maths. So
+  // padding-left buys the tab its width and text-offset is what actually
+  // clears the icon; setting only the former draws the label on top of it.
+  text-align: left
+  text-offset: 38 0
+
+  // (!) THE SIDE-RAIL ART IS A 40x20 TWO-STATE SHEET: the resting glyph at
+  // 0,0 and the lit gold one at 20,0. Without a clip the icon draws at the
+  // texture's full 40x20 -- both states squeezed side by side, which is
+  // exactly the mangled sliver the first version rendered.
+  //
+  // Placed by an explicit rect rather than align+offset so it lands at a known
+  // x and is properly centred in a 34px tab: (34 - 20) / 2 = 7.
+  icon-clip: 0 0 20 20
+  icon-rect: 12 7 20 20
+
+  // No icon-color tint. The sheet already carries its own two states, so the
+  // selected tab switches to the GOLD half of the art rather than being
+  // recoloured -- the same thing the side-button rail does with these files.
+  // Both state clips carry the same 96 correction as the resting one above.
+  $hover !checked:
+    color: #ffffff
+    icon-clip: 20 0 20 20
+    image-clip: 0 18 96 18
+
+  $checked:
+    color: #f0c674
+    icon-clip: 20 0 20 20
+    image-clip: 0 36 96 18
+
+// ---------------- the window ----------------
+//
+// Two tabs on one window. Highscores is primary and opens selected; the whole
+// achievements view is the second tab, moved into AchTabPanel above without a
+// single widget changing. They share a frame because they are one idea from
+// the player's side -- what this character has done, and where that puts them
+// against everyone else -- and sharing it is also why they share an opcode
+// pair rather than burning another from the near-exhausted 0x40-0x4F range.
+AchWindow < MainWindow
+  // No image-color: the frame keeps the client's own neutral stone so the
+  // window sits inside the UI rather than announcing itself, exactly as Bao
+  // and the Bazaar do. The palette lives on the panels inside the frame.
+  id: achievementsWindow
+  !text: tr('Records')
+  size: 920 700
+  @onEscape: modules.game_achievements.hide()
+
+  RecordsTabBar
+    id: mainTabs
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+
+  // (!) The tab panels are parented HERE by UITabBar:selectTab, so this must
+  // be a real sized panel and not `anchors.fill: parent` on something that
+  // also holds the footer -- a filled content area would sit on top of the
+  // Close button and swallow its clicks.
+  Panel
+    id: tabContent
+    anchors.top: mainTabs.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: closeButton.top
+    margin-top: 6
+    margin-bottom: 6
+  // ---------------- footer ----------------
+  // Same chrome as Bao and the Bazaar: Close bottom-right against the frame,
+  // status text sharing the row to its left rather than owning a band of its
+  // own. Feedback lands here rather than in a popup -- a modal steals focus
+  // and hides the thing it is talking about.
+  AchButton
+    id: closeButton
+    !text: tr('Close')
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    width: 64
+    @onClick: modules.game_achievements.hide()
+
+  Label
+    id: statusLine
+    height: 16
+    anchors.left: parent.left
+    anchors.right: closeButton.left
+    anchors.verticalCenter: closeButton.verticalCenter
+    margin-right: 12
+    font: verdana-11px-monochrome
+    color: #9a9a9a

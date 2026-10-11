@@ -12,6 +12,11 @@ local boundActionKeys = {}
 -- ~1 s anyway, so nothing is lost. The first press of a key always runs at once.
 local ACTION_REPEAT_MS = 200
 local lastRepeatRun = 0
+-- Special actions that no longer exist. A slot saved with one is emptied when it
+-- is set up (its key is kept). lootnearestbody: "Loot bodies near you", D7 2026-10-11.
+local RETIRED_ACTIONS = {
+	lootnearestbody = true
+}
 local settingsFile = ""
 local cachedSettings, window, mouseGrabberWidget = nil
 local TYPE = {
@@ -394,6 +399,14 @@ end
 function setupButton(widget)
 	local id = widget:getId()
 	local config = settings[id]
+
+	-- A slot that holds a removed action is emptied; its key stays.
+	if config and type(config.specialAction) == "string" and RETIRED_ACTIONS[config.specialAction:lower()] then
+		config = {
+			hotkey = config.hotkey
+		}
+		settings[id] = config
+	end
 	local actionbar = widget:getParent():getParent()
 
 	widget.item:setShowCount(false)
@@ -1099,6 +1112,18 @@ function assignHotkey(widget)
 
 		window.display:setText(keyCombo)
 
+		-- Keys other modules use (Ctrl+L Logout and the like) are refused.
+		local reserved = getReservedKeyMessage(keyCombo)
+
+		if reserved then
+			window.desc:setText(baseDesc .. "\n\n" .. reserved)
+			window.buttonOk:disable()
+
+			return true
+		end
+
+		window.buttonOk:enable()
+
 		if modules.game_hotkeys and modules.game_hotkeys.isKeyComboUsed and modules.game_hotkeys.isKeyComboUsed(keyCombo) then
 			window.desc:setText(baseDesc .. "\n\n" .. tr("%s is also in the Hotkeys window. If you save, it is removed there.", keyCombo))
 		else
@@ -1110,6 +1135,11 @@ function assignHotkey(widget)
 
 	local function okFunc()
 		local hotkey = window.display:getText()
+
+		-- a reserved key may stay where it was saved before, but is never newly set
+		if hotkey ~= (widget.hotkey or "") and getReservedKeyMessage(hotkey) then
+			return
+		end
 
 		if settings[widget:getId()] and settings[widget:getId()].hotkey and settings[widget:getId()].hotkey:len() > 0 and widget.callback then
 			local gameRootPanel = modules.game_interface.getRootPanel()
@@ -1604,11 +1634,8 @@ function setupExtraHotkeys()
 			modules.game_console.enableChat(true)
 		end
 	end)
-	addExtraHotkey("lootnearestbody", "Loot bodies near you", function (repeated)
-		local protocolGame = g_game.getProtocolGame()
-
-		protocolGame:sendExtendedOpcode(ExtendedIds.AutoLoot_Nearest, 1)
-	end)
+	-- "Loot bodies near you" (lootnearestbody) was removed 2026-10-11 (decision D7):
+	-- see RETIRED_ACTIONS, which empties slots that still hold it.
 end
 
 function setupComboBox(combobox)
@@ -1702,6 +1729,17 @@ function isHotkeyUsed(keyCombo)
 	end
 
 	return getUsedHotkeys()[keyCombo:lower()] ~= nil
+end
+
+-- The refusal text for a key another module uses, or nil when it is free. The
+-- table lives in game_hotkeys (RESERVED_KEYS); asked at key-press time, so there
+-- is no load-order dependency, and with game_hotkeys missing nothing is refused.
+function getReservedKeyMessage(keyCombo)
+	if modules.game_hotkeys and modules.game_hotkeys.getReservedKeyMessage then
+		return modules.game_hotkeys.getReservedKeyMessage(keyCombo)
+	end
+
+	return nil
 end
 
 function notifyHotkeysWindow()

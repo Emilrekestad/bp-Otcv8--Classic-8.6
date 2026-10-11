@@ -15,6 +15,12 @@ lastStop = 0
 lastManualWalk = 0
 autoFinishNextServerWalk = 0
 turnKeys = {}
+-- The exact functions bindWalkKey/bindTurnKey handed to g_keyboard, by key.
+-- Unbinding with them removes only this module's binding. Unbinding with no
+-- callback removed every module's binding on that key (for example an action
+-- bar Q slot), each time a WSAD player pressed Enter to chat.
+walkKeyCallbacks = {}
+turnKeyCallbacks = {}
 
 function init()
 	connect(g_game, {
@@ -105,7 +111,7 @@ function enableWSAD()
 		player:lockWalk(100)
 	end
 
-	g_keyboard.unbindKeyDown("Ctrl+S")
+	g_keyboard.unbindKeyDown("Ctrl+S", modules.game_skills.toggle)
 	bindWalkKey("W", North)
 	bindWalkKey("D", East)
 	bindWalkKey("S", South)
@@ -143,53 +149,88 @@ function disableWSAD()
 end
 
 function bindWalkKey(key, dir)
-	local gameRootPanel = modules.game_interface.getRootPanel()
+	unbindWalkKey(key)
 
-	g_keyboard.bindKeyDown(key, function ()
-		changeWalkDir(dir)
-	end, gameRootPanel, true)
-	g_keyboard.bindKeyUp(key, function ()
-		changeWalkDir(dir, true)
-	end, gameRootPanel, true)
-	g_keyboard.bindKeyPress(key, function (c, k, ticks)
-		smartWalk(dir, ticks)
-	end, gameRootPanel)
+	local gameRootPanel = modules.game_interface.getRootPanel()
+	local callbacks = {
+		down = function ()
+			changeWalkDir(dir)
+		end,
+		up = function ()
+			changeWalkDir(dir, true)
+		end,
+		press = function (c, k, ticks)
+			smartWalk(dir, ticks)
+		end
+	}
+
+	walkKeyCallbacks[key] = callbacks
+
+	g_keyboard.bindKeyDown(key, callbacks.down, gameRootPanel, true)
+	g_keyboard.bindKeyUp(key, callbacks.up, gameRootPanel, true)
+	g_keyboard.bindKeyPress(key, callbacks.press, gameRootPanel)
 end
 
 function unbindWalkKey(key)
+	local callbacks = walkKeyCallbacks[key]
+
+	if not callbacks then
+		return
+	end
+
+	walkKeyCallbacks[key] = nil
+
 	local gameRootPanel = modules.game_interface.getRootPanel()
 
-	g_keyboard.unbindKeyDown(key, gameRootPanel)
-	g_keyboard.unbindKeyUp(key, gameRootPanel)
-	g_keyboard.unbindKeyPress(key, gameRootPanel)
+	g_keyboard.unbindKeyDown(key, callbacks.down, gameRootPanel, true)
+	g_keyboard.unbindKeyUp(key, callbacks.up, gameRootPanel, true)
+	g_keyboard.unbindKeyPress(key, callbacks.press, gameRootPanel)
 end
 
 function bindTurnKey(key, dir)
+	unbindTurnKey(key)
+
 	turnKeys[key] = dir
 	local gameRootPanel = modules.game_interface.getRootPanel()
+	local callbacks = {
+		down = function ()
+			turn(dir, false)
+		end,
+		press = function ()
+			turn(dir, true)
+		end,
+		up = function ()
+			local player = g_game.getLocalPlayer()
 
-	g_keyboard.bindKeyDown(key, function ()
-		turn(dir, false)
-	end, gameRootPanel)
-	g_keyboard.bindKeyPress(key, function ()
-		turn(dir, true)
-	end, gameRootPanel)
-	g_keyboard.bindKeyUp(key, function ()
-		local player = g_game.getLocalPlayer()
-
-		if player then
-			player:lockWalk(200)
+			if player then
+				player:lockWalk(200)
+			end
 		end
-	end, gameRootPanel)
+	}
+
+	turnKeyCallbacks[key] = callbacks
+
+	g_keyboard.bindKeyDown(key, callbacks.down, gameRootPanel)
+	g_keyboard.bindKeyPress(key, callbacks.press, gameRootPanel)
+	g_keyboard.bindKeyUp(key, callbacks.up, gameRootPanel)
 end
 
 function unbindTurnKey(key)
 	turnKeys[key] = nil
+
+	local callbacks = turnKeyCallbacks[key]
+
+	if not callbacks then
+		return
+	end
+
+	turnKeyCallbacks[key] = nil
+
 	local gameRootPanel = modules.game_interface.getRootPanel()
 
-	g_keyboard.unbindKeyDown(key, gameRootPanel)
-	g_keyboard.unbindKeyPress(key, gameRootPanel)
-	g_keyboard.unbindKeyUp(key, gameRootPanel)
+	g_keyboard.unbindKeyDown(key, callbacks.down, gameRootPanel)
+	g_keyboard.unbindKeyPress(key, callbacks.press, gameRootPanel)
+	g_keyboard.unbindKeyUp(key, callbacks.up, gameRootPanel)
 end
 
 function stopSmartWalk()

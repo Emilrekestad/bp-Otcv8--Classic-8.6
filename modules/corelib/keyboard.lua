@@ -219,7 +219,11 @@ local function getUnbindArgs(arg1, arg2)
 	return callback, widget
 end
 
-function g_keyboard.unbindKeyDown(keyComboDesc, arg1, arg2)
+-- 'alone' (optional) removes a binding made with bindKeyDown/bindKeyUp's own
+-- 'alone' flag; those live in a separate table. Callers that leave it out get
+-- the old behaviour. Pass the callback whenever you can: with no callback,
+-- every owner of that key on the widget is removed, not only yours.
+function g_keyboard.unbindKeyDown(keyComboDesc, arg1, arg2, alone)
 	local callback, widget = getUnbindArgs(arg1, arg2)
 
 	if widget.boundKeyDownCombos == nil then
@@ -228,10 +232,14 @@ function g_keyboard.unbindKeyDown(keyComboDesc, arg1, arg2)
 
 	local keyComboDesc = retranslateKeyComboDesc(keyComboDesc)
 
-	disconnect(widget.boundKeyDownCombos, keyComboDesc, callback)
+	if alone then
+		disconnect(widget.boundAloneKeyDownCombos, keyComboDesc, callback)
+	else
+		disconnect(widget.boundKeyDownCombos, keyComboDesc, callback)
+	end
 end
 
-function g_keyboard.unbindKeyUp(keyComboDesc, arg1, arg2)
+function g_keyboard.unbindKeyUp(keyComboDesc, arg1, arg2, alone)
 	local callback, widget = getUnbindArgs(arg1, arg2)
 
 	if widget.boundKeyUpCombos == nil then
@@ -240,7 +248,11 @@ function g_keyboard.unbindKeyUp(keyComboDesc, arg1, arg2)
 
 	local keyComboDesc = retranslateKeyComboDesc(keyComboDesc)
 
-	disconnect(widget.boundKeyUpCombos, keyComboDesc, callback)
+	if alone then
+		disconnect(widget.boundAloneKeyUpCombos, keyComboDesc, callback)
+	else
+		disconnect(widget.boundKeyUpCombos, keyComboDesc, callback)
+	end
 end
 
 function g_keyboard.unbindKeyPress(keyComboDesc, arg1, arg2)

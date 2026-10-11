@@ -39,6 +39,13 @@ hotkeyConfigs = {}
 currentConfig = 1
 configValueChanged = false
 renameWindow = nil
+-- A held key repeats ~30 times a second, and the server disconnects a client that
+-- sends more than 25 packets a second (config maxPacketsPerSecond). Repeats of a held
+-- Hotkeys-window key run at most once per HOTKEY_REPEAT_MS, shared by all keys of this
+-- window, so holding three keys cannot triple the rate (same rule as game_actionbar).
+-- The first press of a key still runs at once, behind its own per-key delay.
+local HOTKEY_REPEAT_MS = 200
+local lastRepeatRun = 0
 
 function init()
 	if not g_app.isMobile() then
@@ -173,6 +180,59 @@ end
 -- One key, one action (2026-10-10): a key on the action bar is not also a hotkey here.
 function isTakenByActionBar(keyCombo)
 	return modules.game_actionbar and modules.game_actionbar.isHotkeyUsed and modules.game_actionbar.isHotkeyUsed(keyCombo) or false
+end
+
+-- Keys other modules already use (2026-10-11). Built from a grep of the
+-- bindKeyDown calls in the shipped modules (client-release/tree/modules).
+-- Both key dialogs (this window and game_actionbar's Edit Hotkey) refuse them,
+-- so a hotkey cannot hide Logout or a window. Hotkeys already saved on one of
+-- these keys are left as they are. Add a row here when a module binds a new key.
+local RESERVED_KEYS = {
+	["ctrl+b"] = "Battle List",
+	["ctrl+e"] = "Close Chat Tab",
+	["ctrl+g"] = "Enter Game",
+	["ctrl+h"] = "Hunt Window",
+	["ctrl+i"] = "Ignore List",
+	["ctrl+k"] = "Hotkeys",
+	["ctrl+l"] = "Logout",
+	["ctrl+m"] = "Big Map",
+	["ctrl+n"] = "Show Names and Bars",
+	["ctrl+o"] = "Chat Channels",
+	["ctrl+p"] = "VIP List",
+	["ctrl+q"] = "Quest Log",
+	["ctrl+r"] = "Mount",
+	["ctrl+s"] = "Skills",
+	["ctrl+t"] = "Terminal",
+	["ctrl+w"] = "Clear Messages",
+	["ctrl+y"] = "Report a Player",
+	["ctrl+z"] = "Report a Bug",
+	["ctrl+alt+d"] = "Client Stats",
+	["ctrl+shift+f"] = "Full Screen",
+	["ctrl+shift+r"] = "Reload Client",
+	["ctrl+shift+t"] = "Top Menu",
+	["enter"] = "Chat",
+	["escape"] = "Stop Attacking",
+	["tab"] = "Chat Tabs"
+}
+
+-- What another module uses this key for, or nil when the key is free.
+function getReservedKeyName(keyCombo)
+	if not keyCombo or keyCombo:len() == 0 then
+		return nil
+	end
+
+	return RESERVED_KEYS[keyCombo:lower()]
+end
+
+-- The refusal both key dialogs show, or nil when the key is free.
+function getReservedKeyMessage(keyCombo)
+	local name = getReservedKeyName(keyCombo)
+
+	if not name then
+		return nil
+	end
+
+	return tr("%s is used for %s. Choose another key.", keyCombo, tr(name))
 end
 
 function load(forceDefaults)
@@ -659,12 +719,9 @@ function addKeyCombo(keyCombo, keySettings, focus)
 		if not keyCombo:lower():find("ctrl") then
 			local keyComboCtrl = "Ctrl+" .. keyCombo
 
-			if not boundCombosCallback[keyComboCtrl] then
-				boundCombosCallback[keyComboCtrl] = function (k, c, ticks)
-					prepareKeyCombo(keyComboCtrl, ticks)
-				end
-
-				g_keyboard.bindKeyPress(keyComboCtrl, boundCombosCallback[keyComboCtrl], gameRootPanel)
+			-- the hidden Ctrl+ twin; a Ctrl+key on the action bar belongs to the bar
+			if not boundCombosCallback[keyComboCtrl] and not isTakenByActionBar(keyComboCtrl) then
+				bindCtrlTwin(keyComboCtrl, gameRootPanel)
 			end
 		end
 	end
@@ -678,6 +735,14 @@ function addKeyCombo(keyCombo, keySettings, focus)
 	configValueChanged = true
 end
 
+function bindCtrlTwin(keyComboCtrl, gameRootPanel)
+	boundCombosCallback[keyComboCtrl] = function (k, c, ticks)
+		prepareKeyCombo(keyComboCtrl, ticks)
+	end
+
+	g_keyboard.bindKeyPress(keyComboCtrl, boundCombosCallback[keyComboCtrl], gameRootPanel)
+end
+
 function prepareKeyCombo(keyCombo, ticks)
 	local hotKey = hotkeyList[keyCombo]
 
@@ -689,6 +754,18 @@ function prepareKeyCombo(keyCombo, ticks)
 
 	if not hotKey then
 		return
+	end
+
+	-- ticks is how long the key has been held: 0 on the first press, more on repeats.
+	-- Repeats share one gate for all keys of this window (see HOTKEY_REPEAT_MS).
+	if ticks and ticks > 0 then
+		local now = g_clock.millis()
+
+		if now - lastRepeatRun < HOTKEY_REPEAT_MS then
+			return
+		end
+
+		lastRepeatRun = now
 	end
 
 	if hotKey.itemId == nil and hotKey.action == nil then
@@ -709,7 +786,10 @@ function doKeyCombo(keyCombo, repeated)
 		return
 	end
 
-	if modules.game_walking then
+	-- Only on the first press: each call can send a turn packet, and a held key
+	-- repeats ~30 times a second. Turning while Ctrl+arrow is held is done by
+	-- walking.lua's own handler, which has its own 100 ms limit.
+	if modules.game_walking and not repeated then
 		modules.game_walking.checkTurn()
 	end
 
@@ -1067,6 +1147,19 @@ function hotkeyCapture(assignWindow, keyCode, keyboardModifiers)
 		return true
 	end
 
+	local reserved = getReservedKeyMessage(keyCombo)
+
+	if reserved then
+		comboPreview:setText(reserved)
+
+		comboPreview.keyCombo = ""
+
+		comboPreview:resizeToText()
+		assignWindow:getChildById("addButton"):disable()
+
+		return true
+	end
+
 	comboPreview:setText(tr("Current hotkey to add: %s", keyCombo))
 
 	comboPreview.keyCombo = keyCombo
@@ -1137,6 +1230,29 @@ function syncWithActionBar()
 			child:destroy()
 
 			removed[#removed + 1] = keyCombo
+		end
+	end
+
+	-- Hidden Ctrl+ twins of the hotkeys that stay: unbind a twin whose Ctrl+key the
+	-- bar now holds, and bind it again once the bar lets that key go. The hotkey
+	-- itself stays, so the player is not told.
+	for _, child in ipairs(currentHotkeys:getChildren()) do
+		local keyCombo = child.keyCombo
+
+		if keyCombo and keyCombo:len() > 0 and not keyCombo:lower():find("ctrl") then
+			local ctrlCombo = "Ctrl+" .. keyCombo
+
+			if not currentHotkeys:getChildById(ctrlCombo) then
+				if isTakenByActionBar(ctrlCombo) then
+					if boundCombosCallback[ctrlCombo] then
+						g_keyboard.unbindKeyPress(ctrlCombo, boundCombosCallback[ctrlCombo], gameRootPanel)
+
+						boundCombosCallback[ctrlCombo] = nil
+					end
+				elseif not boundCombosCallback[ctrlCombo] then
+					bindCtrlTwin(ctrlCombo, gameRootPanel)
+				end
+			end
 		end
 	end
 

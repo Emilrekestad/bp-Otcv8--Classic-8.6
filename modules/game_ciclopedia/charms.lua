@@ -5,6 +5,7 @@ local function requestBestiaryInfo()
 	if protocolGame then
     local msg = OutputMessage.create()
     msg:addU8(CyclopediaOpcode.Info)
+    msg:addU8(2) -- which tab asked (charms tab); the server keys its cooldown on it, older servers ignore it
     protocolGame:send(msg)
 	end  
 
@@ -56,6 +57,69 @@ local function registerCharmsProtocol()
 	end
 end
 
+-- ---------------------------------------------------------------------------
+-- Charm currencies, tiers and the shared confirm dialog.
+--
+-- (!) There are TWO currencies and this window only ever knew about one.
+-- Major charms are unlocked and upgraded with charm POINTS; minor charms with
+-- MINOR CHARM ECHOES, which the server mints whenever a major charm is
+-- upgraded. Every affordability check here tested the point balance, so all
+-- 11 minor charms rendered as affordable and then failed server-side with
+-- "You do not have enough minor charm echoes."
+--
+-- The category now arrives on a byte the server was ALREADY sending as a
+-- constant 0 (read into an unused `getGold` local), so the packet is exactly
+-- the same size and an un-updated client is unaffected.
+local CATEGORY_MINOR = 1
+local TIER_ROMAN = { [1] = 'I', [2] = 'II', [3] = 'III' }
+local MAX_TIER = 3
+
+local charmPointsBalance = 0
+local minorEchoBalance = 0
+local charmResetCost = 0
+-- Assignments are capped (6 on premium, 2 otherwise) and the refusal comes
+-- back as a bare server message with no warning beforehand. The count rides
+-- along in the charm packet, so the Select confirmation can say it up front.
+local freeCharmSlots = 0
+
+local function balanceFor(category)
+	return category == CATEGORY_MINOR and minorEchoBalance or charmPointsBalance
+end
+
+local function currencyIcon(category)
+	return category == CATEGORY_MINOR and '/images/modern_ui/charm' or '/images/modern_ui/charm_big'
+end
+
+local function currencyName(category)
+	return category == CATEGORY_MINOR and 'Minor Charm Echoes' or 'Charm Points'
+end
+
+-- All four charm actions confirm through the same little window. The
+-- show/raise/focus/lock dance was copy-pasted three times; upgrade and reset
+-- would have made it five.
+local function confirmAction(text, send)
+	if not buyWindow then
+		createBuyWindow()
+	end
+	buyWindow:show()
+	buyWindow:raise()
+	buyWindow:focus()
+
+	local buyText = buyWindow:recursiveGetChildById('buyText')
+	local buttonYes = buyWindow:recursiveGetChildById('buttonYes')
+	buyText:setText(text)
+
+	buttonYes.onClick = function()
+		buyHide()
+		charmsWindow:show()
+		charmsWindow:raise()
+		charmsWindow:focus()
+		charmsWindow:lock()
+		send()
+		resetCharmsData()
+	end
+end
+
 local function firstToUpper(str)
     return (str:gsub("^%l", string.upper))
 end
@@ -71,63 +135,86 @@ function readCyclopediaCharmResources(msg)
 end
 
 function sendBestiaryCharmsData(msg)
-local charmsView = isCharmsView()
-if charmsView and not charmsWindow then
-	charmsWindow = g_ui.loadUI("styles/charms", getContentContainer())
+	local charmsView = isCharmsView()
+	if charmsView and not charmsWindow then
+		charmsWindow = g_ui.loadUI("styles/charms", getContentContainer())
 	end
+
 	local resources = readCyclopediaCharmResources(msg)
-	local charmsAmount = resources.charmPoints
+	charmPointsBalance = resources.charmPoints
+	minorEchoBalance = resources.minorEchoes
 	local goldAmount = resources.gold
+
 	if charmsView and charmAmount then
-		charmAmount:setText(charmsAmount)
+		charmAmount:setText(comma_value(charmPointsBalance))
 	end
-		 
+	if charmsView and echoAmount then
+		echoAmount:setText(comma_value(minorEchoBalance))
+	end
 	if charmsView and goldPoints then
-		goldPoints:setText(goldAmount)
+		goldPoints:setText(comma_value(goldAmount))
 	end
-		 BestiaryChangeAmount(charmsAmount,goldAmount)
-		 
+	BestiaryChangeAmount(charmPointsBalance, goldAmount)
+
 	local charmsList = {}
 	local charms = msg:getU8()
 	for i = 1, charms do
 		local runeId = msg:getU8()
 		local runeName = msg:getString()
 		local runeDescription = msg:getString()
-		local getGold = msg:getU8()
+		-- (!) This byte used to be a constant 0 read into an unused `getGold`.
+		-- It now carries the charm's CATEGORY, which is the only way to know
+		-- which of the two currencies the server will actually charge.
+		local category = msg:getU8()
 		local unlockPoints = msg:getU16()
-		
-		local activatedStatus, asignedStatus, raceId, removeRuneCost = msg:getU8(), false, 0, 0		
-		if (activatedStatus > 0) then
-			local asigned = msg:getU8()
-			if (asigned > 0) then
-				asignedStatus = true
-				raceId = msg:getU16() -- Raceid
-				removeRuneCost = msg:getU32() -- Remove runeCost
+
+		-- (!) This is the TIER (0-3), not a boolean. It was named
+		-- `activatedStatus` and compared with `== 1`, so a charm at tier 2 or 3
+		-- matched neither the unlocked nor the locked list and vanished from the
+		-- window entirely, taking its creature assignment out of reach with it.
+		local tier, assigned, raceId, removeRuneCost = msg:getU8(), false, 0, 0
+		if tier > 0 then
+			local isAssigned = msg:getU8()
+			if isAssigned > 0 then
+				assigned = true
+				raceId = msg:getU16()
+				removeRuneCost = msg:getU32()
 				protoData[raceId] = readCharmCreatureOutfit(msg)
 			end
 		else
 			msg:getU8()
 		end
-		
+
 		table.insert(charmsList, {
 			id = runeId,
 			name = runeName,
 			description = runeDescription,
-			unlockPrice = unlockPoints,
-			activated = activatedStatus,
-			asignedStatus = asignedStatus,
+			price = unlockPoints,
+			category = category,
+			tier = tier,
+			assigned = assigned,
 			raceId = raceId,
 			removeRuneCost = removeRuneCost
 		})
 	end
-	
-	if charmsView and charmDescription and charmRune and charmInfoPrice and charmInfoPrice and unlockCharmButton then
-		createCharms(charmsList, charmsAmount) -- We use the data that we filled
+
+	if charmsView and charmDescription and charmRune and charmInfoPrice and unlockCharmButton then
+		createCharms(charmsList)
 	end
-	
-	msg:getU32() -- Charm reset cost
-	msg:getU8() -- Empty charm slots
-	
+
+	-- Both of these were parsed and dropped. The reset price is what the
+	-- Reset Charms button quotes; the slot count is what tells the player why
+	-- an assignment is about to be refused.
+	charmResetCost = msg:getU32()
+	freeCharmSlots = msg:getU8()
+
+	if charmsView and resetCharmsButton then
+		resetCharmsButton:setVisible(true)
+		resetCharmsButton:setTooltip(string.format(
+			'Clears every charm and its creature, refunds all charm points spent on major charms, and costs %s gold. Minor charm echoes are NOT refunded.',
+			comma_value(charmResetCost)))
+	end
+
 	local finishedMonstersSize = msg:getU16()
 	local generatedMonsters = {}
 	for i = 1, finishedMonstersSize do
@@ -137,28 +224,28 @@ if charmsView and not charmsWindow then
 		if charmsView and monsterSelecter and sPData then
 			local monsterRow = g_ui.createWidget('MonsterCharm', monsterSelecter)
 			if (i % 2 == 0) then monsterRow:setBackgroundColor("#484848") end
-			
+
 			monsterRow:setText(firstToUpper(sPData.name))
-			monsterRow:setId("monsterWidget"..i)
-			table.insert(generatedMonsters, "monsterWidget"..i)
+			monsterRow:setId("monsterWidget" .. i)
+			table.insert(generatedMonsters, "monsterWidget" .. i)
 
 			monsterRow.onClick = function(self)
-				for i = 1, #generatedMonsters do
-					-- local aWidget = 
-					if (i % 2 == 0) then 
-						if monsterSelecter:getChildById("monsterWidget"..i) then
-							monsterSelecter:getChildById("monsterWidget"..i):setBackgroundColor("#484848") 
-						end
-					else
-						if monsterSelecter:getChildById("monsterWidget"..i) then
-							monsterSelecter:getChildById("monsterWidget"..i):setBackgroundColor("#404040")
-						end
+				for j = 1, #generatedMonsters do
+					local row = monsterSelecter:getChildById("monsterWidget" .. j)
+					if row then
+						row:setBackgroundColor((j % 2 == 0) and "#484848" or "#404040")
 					end
 				end
-				
-				unlockCharmButton:enable()
-				unlockCharmButton:setOpacity(1)
-				
+
+				-- Picking a creature arms the ASSIGN button now, not the
+				-- progression one -- enabling Unlock/Upgrade here would have let a
+				-- click spend points the player could not afford.
+				local assignButton = informationContainer:recursiveGetChildById('assignCharmButton')
+				if assignButton and assignButton:isVisible() then
+					assignButton:enable()
+					assignButton:setOpacity(1)
+				end
+
 				charmMonster:show()
 				charmMonster:setOutfit(protoData[raceId])
 				monsterRow:setBackgroundColor("#585858")
@@ -178,262 +265,208 @@ function buyHide()
 	buyWindow:hide()
 end
 
-function setupCharm(name, desc, id, price, unlocked, charmBalance, aStatus, rId, removeRuneCost)
+-- `c` is one charm: id, name, description, price (the NEXT tier's, 0 once
+-- maxed), tier 0-3, category, assigned, raceId, removeRuneCost.
+function setupCharm(c)
 	charmMonster:hide()
 	monsterSelecter:show()
-	charmDescription:setText(desc)
-	charmRune:setImageSource('/images/game/charms/'..id)
-	charmInfoPrice:setText(price)
+	charmDescription:setText(c.description)
+	charmRune:setImageSource('/images/game/charms/' .. c.id)
 
-	if not unlocked then
-		unlockCharmButton:setText("Unlock")
-		monsterSelecter:hide()
-			
-		if (price <= charmBalance) then
-			charmInfoPrice:setColor("#ffffff")
-			unlockCharmButton:enable()
-			unlockCharmButton:setOpacity(1)
-		else
-			charmInfoPrice:setColor("#d33c3c")
-			unlockCharmButton:disable()
-			unlockCharmButton:setOpacity(0.5)
-		end
+	local maxed = c.tier >= MAX_TIER
+	local balance = balanceFor(c.category)
+	local affordable = (not maxed) and c.price > 0 and balance >= c.price
+
+	local tierLabel = informationContainer:recursiveGetChildById('charmTier')
+	if tierLabel then
+		tierLabel:setText(c.tier > 0 and TIER_ROMAN[c.tier] or '')
+	end
+
+	local priceIcon = charmPriceContainer:recursiveGetChildById('charmIcon')
+	if priceIcon then
+		priceIcon:setImageSource(currencyIcon(c.category))
+	end
+
+	charmInfoPrice:setText(maxed and '-' or comma_value(c.price))
+	charmInfoPrice:setColor((maxed or affordable) and '#ffffff' or '#d33c3c')
+
+	-- ---- progression: Unlock -> Upgrade -> Maxed --------------------------
+	if maxed then
+		unlockCharmButton:setText('Maxed')
+		unlockCharmButton:disable()
+		unlockCharmButton:setOpacity(0.5)
 	else
-		if not aStatus then
-			unlockCharmButton:setText("Select")
-			unlockCharmButton:disable()
-			unlockCharmButton:setOpacity(0.5)
-			charmInfoPrice:setColor("#ffffff")
-			
-			monsterSelecter:setOpacity(1)
-			monsterSelecter:enable()
+		unlockCharmButton:setText(c.tier == 0 and 'Unlock' or 'Upgrade')
+		unlockCharmButton:setEnabled(affordable)
+		unlockCharmButton:setOpacity(affordable and 1 or 0.5)
+	end
+
+	unlockCharmButton.onClick = function()
+		if maxed then
+			return
+		end
+		local text
+		if c.tier == 0 then
+			text = string.format('Do you want to unlock the Charm %s? This will cost you %s %s.',
+				c.name, comma_value(c.price), currencyName(c.category))
 		else
-			unlockCharmButton:setText("Remove")
-			unlockCharmButton:enable()
-			unlockCharmButton:setOpacity(1)
-			
-			charmInfoPrice:setColor("#ffffff")
-			charmMonster:show()
-			if protoData[rId] then
-				charmMonster:setOutfit(protoData[rId])
+			text = string.format('Do you want to upgrade the Charm %s to tier %s? This will cost you %s %s.',
+				c.name, TIER_ROMAN[c.tier + 1], comma_value(c.price), currencyName(c.category))
+		end
+		confirmAction(text, function() parseSendBuyCharmRune(c.id, 0, nil) end)
+	end
+
+	-- ---- assignment: Select / Remove --------------------------------------
+	local assignButton = informationContainer:recursiveGetChildById('assignCharmButton')
+
+	if c.tier == 0 then
+		-- Nothing to assign, and no creature list to pick from.
+		if assignButton then assignButton:setVisible(false) end
+		monsterSelecter:hide()
+	else
+		if assignButton then
+			assignButton:setVisible(true)
+			if c.assigned then
+				assignButton:setText('Remove')
+				assignButton:enable()
+				assignButton:setOpacity(1)
+			else
+				-- Enabled by the creature rows once something is actually picked.
+				assignButton:setText('Select')
+				assignButton:disable()
+				assignButton:setOpacity(0.5)
 			end
-			
+
+			assignButton.onClick = function()
+				if c.assigned then
+					confirmAction(string.format(
+						'Do you want to remove the Charm %s from this creature? This will cost you %s gold pieces.',
+						c.name, comma_value(c.removeRuneCost)),
+						function() parseSendBuyCharmRune(c.id, 2, c.raceId) end)
+				else
+					confirmAction(string.format(
+						'Do you want to use the Charm %s for this creature? You have %d charm %s free.',
+						c.name, freeCharmSlots, freeCharmSlots == 1 and 'slot' or 'slots'),
+						function() parseSendBuyCharmRune(c.id, 1, selectedRaceId) end)
+				end
+			end
+		end
+
+		if c.assigned then
+			charmMonster:show()
+			if protoData[c.raceId] then
+				charmMonster:setOutfit(protoData[c.raceId])
+			end
 			monsterSelecter:setOpacity(0.5)
 			monsterSelecter:disable()
+		else
+			monsterSelecter:setOpacity(1)
+			monsterSelecter:enable()
 		end
 	end
-	
-	-- Setup the buy charm window
+
 	createBuyWindow()
-	
-	unlockCharmButton.onClick = function(self)
-		if unlockCharmButton:getText() == "Unlock" then
-			buyWindow:show()
-			buyWindow:raise()
-			buyWindow:focus()
-			
-			buyText = buyWindow:recursiveGetChildById('buyText')
-			buttonYes = buyWindow:recursiveGetChildById('buttonYes')
-			
-			buyText:setText("Do you want to unlock the Charm "..name.."? This will cost you "..price.." Charm Points?")
-			
-			buttonYes.onClick = function(self)
-				buyHide()
-				charmsWindow:show()
-				charmsWindow:raise()
-				charmsWindow:focus()
-				charmsWindow:lock()
-				parseSendBuyCharmRune(id, 0, nil)
-				
-				resetCharmsData()
-			end
-		elseif unlockCharmButton:getText() == "Select" then
-			buyWindow:show()
-			buyWindow:raise()
-			buyWindow:focus()
-			
-			buyText = buyWindow:recursiveGetChildById('buyText')
-			buttonYes = buyWindow:recursiveGetChildById('buttonYes')
-			buyText:setText("Do you want to use the Charm "..name.." for this creature?")
-			
-			buttonYes.onClick = function(self)
-				buyHide()
-				charmsWindow:show()
-				charmsWindow:raise()
-				charmsWindow:focus()
-				charmsWindow:lock()
-				parseSendBuyCharmRune(id, 1, selectedRaceId)
-				
-				resetCharmsData()
-			end
-		elseif unlockCharmButton:getText() == "Remove" then
-			buyWindow:show()
-			buyWindow:raise()
-			buyWindow:focus()
-			
-			buyText = buyWindow:recursiveGetChildById('buyText')
-			buttonYes = buyWindow:recursiveGetChildById('buttonYes')
-			buyText:setText("Do you want to remove the Charm "..name.." from this creature? This will cost you "..tr(removeRuneCost).." gold pieces.")
-			
-			buttonYes.onClick = function(self)
-				buyHide()
-				charmsWindow:show()
-				charmsWindow:raise()
-				charmsWindow:focus()
-				charmsWindow:lock()
-				parseSendBuyCharmRune(id, 2, rId)
-				
-				resetCharmsData()
-			end
-		end
-	end
-	
-	actualCharm = i
 end
 
 local function comparePrices(a, b)
-	return a.unlockPrice < b.unlockPrice
+	return a.price < b.price
 end
 
-function createCharms(charmsData, charmsBalance)
-	-- Generate unlocked charms
+-- (!) The split is on TIER, not on a boolean. See the note in
+-- sendBestiaryCharmsData: `activated == 1` / `== 0` silently dropped every
+-- charm above tier 1.
+function createCharms(charmsData)
 	local unlockedCharms = {}
-	for i = 1, #charmsData do
-		if (charmsData[i].activated == 1) then
-			table.insert(unlockedCharms, {
-				id = charmsData[i].id,
-				name = charmsData[i].name,
-				description = charmsData[i].description,
-				unlockPrice = charmsData[i].unlockPrice,
-				asignedStatus = charmsData[i].asignedStatus,
-				activated = charmsData[i].activated,
-				raceId = charmsData[i].raceId,
-				removeRuneCost = charmsData[i].removeRuneCost
-			})
-		end
-	end
-	
-	-- Generate locked charms
 	local lockedCharms = {}
 	for i = 1, #charmsData do
-		if (charmsData[i].activated == 0) then
-			table.insert(lockedCharms, {
-				id = charmsData[i].id,
-				name = charmsData[i].name,
-				description = charmsData[i].description,
-				unlockPrice = charmsData[i].unlockPrice,
-				asignedStatus = charmsData[i].asignedStatus,
-				activated = charmsData[i].activated,
-				raceId = charmsData[i].raceId,
-				removeRuneCost = charmsData[i].removeRuneCost
-			})
+		if charmsData[i].tier > 0 then
+			table.insert(unlockedCharms, charmsData[i])
+		else
+			table.insert(lockedCharms, charmsData[i])
 		end
 	end
 
 	table.sort(unlockedCharms, comparePrices)
 	table.sort(lockedCharms, comparePrices)
-	
-	-- Generate charm data
+
 	local generatedCharms = {}
-	local unlockedCharmAmount = #unlockedCharms
 	local firstCharm = false
-	
-	for i = 1, unlockedCharmAmount do
-		local name = unlockedCharms[i].name
-		local description = unlockedCharms[i].description
-		local id = unlockedCharms[i].id
-		local uPrice = unlockedCharms[i].unlockPrice
-		local aStatus = unlockedCharms[i].asignedStatus
-		local rId = unlockedCharms[i].raceId
-		local removeRuneCost = unlockedCharms[i].removeRuneCost
+
+	-- One card builder for both lists. They were two near-identical 40-line
+	-- blocks that had already drifted apart (only the locked one set
+	-- `row.unlocked`, only the unlocked one touched the monster portrait).
+	local function buildCard(c, index)
 		local row = g_ui.createWidget('Charm', charmSelecter)
-		
-		row:setId("charmWidget"..i)
-		table.insert(generatedCharms, "charmWidget"..i)
-		
-		firstCharm = true
-		row.charmRune:setImageSource('/images/game/charms/'..id)
-		row.charmDisabler:hide()
-		
-		row:setText(name)
-		
+		local widgetId = "charmWidget" .. index
+		row:setId(widgetId)
+		table.insert(generatedCharms, widgetId)
+
+		row.unlocked = c.tier > 0
+		row.charmRune:setImageSource('/images/game/charms/' .. c.id)
+		row:setText(c.name)
+
+		if c.tier > 0 then
+			row.charmDisabler:hide()
+		end
+
+		local tierLabel = row:recursiveGetChildById('charmTier')
+		if tierLabel then
+			tierLabel:setText(c.tier > 0 and TIER_ROMAN[c.tier] or '')
+		end
+
 		local charmPriceContainer = row.charmPriceContainer
-		charmPriceContainer.charmPrice:setColor("white")
-		
-		local charmMonster = row.charmMonsterContainer:recursiveGetChildById("charmMonster")
-		if aStatus and protoData[rId] then
-			charmMonster:setOutfit(protoData[rId])
+		local priceLabel = charmPriceContainer:recursiveGetChildById('charmPrice')
+		local priceIcon = charmPriceContainer:recursiveGetChildById('charmIcon')
+		if priceIcon then
+			priceIcon:setImageSource(currencyIcon(c.category))
 		end
-		
-		if i == 1 then
-			row.borderContainer:setBorderWidth(2)
-			row.borderContainer:setBorderColor('white')
-			setupCharm(name, description, id, uPrice, true, charmsBalance, aStatus, rId, removeRuneCost)
-		end
-		
-		if (uPrice >= 1000) then
-			charmPriceContainer:recursiveGetChildById('charmPrice'):setText(tr(uPrice))
+
+		local maxed = c.tier >= MAX_TIER
+		if maxed then
+			priceLabel:setText('-')
+			priceLabel:setColor('#ffffff')
 		else
-			charmPriceContainer:recursiveGetChildById('charmPrice'):setText(uPrice)
+			priceLabel:setText(c.price >= 1000 and comma_value(c.price) or tostring(c.price))
+			-- Priced in the currency the SERVER will charge, so a minor charm no
+			-- longer reads as affordable off the point balance.
+			priceLabel:setColor(balanceFor(c.category) >= c.price and '#ffffff' or '#d33c3c')
 		end
-		
+
+		local charmMonsterWidget = row.charmMonsterContainer:recursiveGetChildById("charmMonster")
+		if c.assigned and protoData[c.raceId] and charmMonsterWidget then
+			charmMonsterWidget:setOutfit(protoData[c.raceId])
+		end
+
 		local affectedCharm = row.borderContainer
-		affectedCharm.onClick = function(self)
-			for i = 1, #generatedCharms do
-				charmSelecter:getChildById("charmWidget"..i).borderContainer:setBorderColor('#000000')
-				charmSelecter:getChildById("charmWidget"..i).borderContainer:setBorderWidth(0)
+		local function selectThis()
+			for _, id in ipairs(generatedCharms) do
+				local other = charmSelecter:getChildById(id)
+				if other then
+					other.borderContainer:setBorderColor('#000000')
+					other.borderContainer:setBorderWidth(0)
+				end
 			end
-			
-			setupCharm(name, description, id, uPrice, true, charmsBalance, aStatus, rId, removeRuneCost)
+			setupCharm(c)
 			affectedCharm:setBorderWidth(2)
 			affectedCharm:setBorderColor('white')
 		end
-	end
-	
-	for i = 1, #lockedCharms do
-		local name = lockedCharms[i].name
-		local description = lockedCharms[i].description
-		local id = lockedCharms[i].id
-		local uPrice = lockedCharms[i].unlockPrice
-		local row = g_ui.createWidget('Charm', charmSelecter)
-		
-		row.unlocked = false
-		row:setId("charmWidget"..i+unlockedCharmAmount)
-		table.insert(generatedCharms, "charmWidget"..i+unlockedCharmAmount)
-		
-		row.charmRune:setImageSource('/images/game/charms/'..id)
-		row:setText(name)
-		
-		local charmPriceContainer = row.charmPriceContainer
-		if charmsBalance >= uPrice then
-			charmPriceContainer.charmPrice:setColor("white")
-		end
-		
-		if i == 1 and not firstCharm then
-			row.borderContainer:setBorderWidth(2)
-			row.borderContainer:setBorderColor('white')
-			setupCharm(name, description, id, uPrice, false, charmsBalance, false, 0, 0)
-		end
-		
-		if (uPrice >= 1000) then
-			row.charmPriceContainer:recursiveGetChildById('charmPrice'):setText(tr(uPrice))
-		else
-			row.charmPriceContainer:recursiveGetChildById('charmPrice'):setText(uPrice)
-		end
-		
-		local affectedCharm = row.borderContainer
-		affectedCharm.onClick = function(self)
-			for i = 1, #generatedCharms do
-				charmSelecter:getChildById("charmWidget"..i).borderContainer:setBorderColor('#000000')
-				charmSelecter:getChildById("charmWidget"..i).borderContainer:setBorderWidth(0)
-			end
-			
-			setupCharm(name, description, id, uPrice, false, charmsBalance, false, 0, 0)
+
+		affectedCharm.onClick = selectThis
+
+		if not firstCharm then
+			firstCharm = true
 			affectedCharm:setBorderWidth(2)
 			affectedCharm:setBorderColor('white')
+			setupCharm(c)
 		end
 	end
 
+	for i = 1, #unlockedCharms do
+		buildCard(unlockedCharms[i], i)
+	end
+	for i = 1, #lockedCharms do
+		buildCard(lockedCharms[i], i + #unlockedCharms)
+	end
 end
 
 function initCharms()
@@ -443,6 +476,9 @@ function initCharms()
 	-- Selecter for charms
 	blackBG02 = charmsWindow:recursiveGetChildById('blackBG02')
 		charmAmount = blackBG02:recursiveGetChildById('charmAmount')
+	blackBG03 = charmsWindow:recursiveGetChildById('blackBG03')
+		echoAmount = blackBG03:recursiveGetChildById('echoAmount')
+	resetCharmsButton = charmsWindow:recursiveGetChildById('resetCharmsButton')
 	
 		goldPoints = charmsWindow:recursiveGetChildById('goldPoints')
 		
@@ -468,6 +504,19 @@ function initCharms()
 	})
 	
 	registerCharmsProtocol()
+
+	-- Action 3. Fully implemented server-side and previously unreachable: the
+	-- client parsed its price and threw it away. The cost is read at CLICK
+	-- time because it scales with level and is refreshed on every charm
+	-- packet, so capturing it here would quote a stale number.
+	if resetCharmsButton then
+		resetCharmsButton.onClick = function()
+			confirmAction(string.format(
+				'Reset ALL charms? Every charm is locked again and unassigned. Charm points spent on major charms are refunded; minor charm echoes are NOT. This costs %s gold pieces.',
+				comma_value(charmResetCost)),
+				function() parseSendBuyCharmRune(0, 3, 0) end)
+		end
+	end
 
 	-- We make the request
 	requestBestiaryInfo()

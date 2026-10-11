@@ -8,6 +8,7 @@ function init()
 	minimapWindowBig = g_ui.loadUI("minimap_big", modules.game_interface.getRootPanel())
 	minimapWidget = minimapWindowBig:recursiveGetChildById("minimapWidgetBig")
 	minimapWidget.onMousePress = onMinimapMousePress
+	routeFlagsToMainMinimap()
 
 	g_keyboard.bindKeyDown("Ctrl+M", toggle)
 	minimapWindowBig:hide()
@@ -41,7 +42,22 @@ function toggle()
 		minimapWindowBig:hide()
 	else
 		minimapWindowBig:show()
-		updateCameraPosition()
+		syncFlagsFromMainMinimap()
+
+		-- show() doesn't guarantee the widget's layout is ready in this same
+		-- frame, so calling updateCameraPosition() immediately can silently
+		-- no-op on the very first open (its own layout-readiness guard fails)
+		-- - the map would only actually position itself after a subsequent
+		-- close/reopen. Poll until layout is ready instead, same pattern
+		-- already used for the initial onGameStart case below.
+		local function safeUpdate()
+			if minimapWidget and minimapWidget:isVisible() and minimapWidget:getLayout() then
+				updateCameraPosition()
+			else
+				scheduleEvent(safeUpdate, 50)
+			end
+		end
+		safeUpdate()
 	end
 end
 
@@ -108,6 +124,106 @@ function loadMap()
 	end
 
 	minimapWidget:load()
+end
+
+-- Marks: game_minimap is the one owner. It loads the saved marks at login and
+-- saves them at logout. This big map used to keep its own list that was never
+-- saved, so marks made here were lost. Now every mark added or removed here is
+-- also added to or removed from game_minimap's widget, and this map copies
+-- game_minimap's marks each time it opens.
+local function getMainMinimap()
+	local main = modules.game_minimap and modules.game_minimap.minimapWidget
+
+	if main and not main:isDestroyed() then
+		return main
+	end
+
+	return nil
+end
+
+local function onBigFlagMouseRelease(flag, pos, button)
+	if button ~= MouseRightButton then
+		return false
+	end
+
+	local menu = g_ui.createWidget("PopupMenu")
+
+	menu:setGameMenu(true)
+	menu:addOption(tr("Delete mark"), function ()
+		local main = getMainMinimap()
+
+		if main and flag.pos then
+			main:removeFlag(flag.pos)
+		end
+
+		flag:destroy()
+	end)
+	menu:display(pos)
+
+	return true
+end
+
+function routeFlagsToMainMinimap()
+	function minimapWidget:addFlag(pos, icon, description, temporary)
+		UIMinimap.addFlag(self, pos, icon, description, temporary)
+
+		local flag = pos and self:getFlag(pos)
+
+		if flag then
+			flag.onMouseRelease = onBigFlagMouseRelease
+		end
+
+		local main = getMainMinimap()
+
+		if main and main ~= self then
+			main:addFlag(pos, icon, description, temporary)
+		end
+	end
+
+	function minimapWidget:removeFlag(pos, icon, description)
+		UIMinimap.removeFlag(self, pos, icon, description)
+
+		local main = getMainMinimap()
+
+		if main and main ~= self and pos then
+			main:removeFlag(pos, icon, description)
+		end
+	end
+end
+
+function syncFlagsFromMainMinimap()
+	local main = getMainMinimap()
+
+	if not main or not main.flags or not minimapWidget.flags then
+		return
+	end
+
+	-- Drop marks that were deleted on the small map.
+	local stale = {}
+
+	for _, flag in pairs(minimapWidget.flags) do
+		local mainFlag = flag.pos and main:getFlag(flag.pos)
+
+		if not mainFlag then
+			table.insert(stale, flag)
+		end
+	end
+
+	for _, flag in ipairs(stale) do
+		flag:destroy()
+	end
+
+	-- Copy marks made on the small map. UIMinimap.addFlag skips ones we have,
+	-- and calling it directly does not send them back to the small map.
+	for _, mainFlag in pairs(main.flags) do
+		UIMinimap.addFlag(minimapWidget, mainFlag.pos, mainFlag.icon, mainFlag.description, mainFlag.temporary)
+
+		local flag = minimapWidget:getFlag(mainFlag.pos)
+
+		if flag then
+			flag.onMouseRelease = onBigFlagMouseRelease
+		end
+	end
 end
 
 function updateCameraPosition()
