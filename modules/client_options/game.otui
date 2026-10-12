@@ -72,6 +72,19 @@ OptionPanel
     margin-top: 8
 
     OptionCheckBox
+      id: moveFullStack
+      !text: tr('Move stack directly')
+      !tooltip: tr('Drag a stack to move all of it at once.\nHold Ctrl to choose how many. Hold Shift to move one.')
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      margin: 5
+
+  FlatPanel
+    height: 22
+    margin-top: 8
+
+    OptionCheckBox
       id: displayNames
       !text: tr('Display creature names')
       anchors.left: parent.left
@@ -144,28 +157,3 @@ OptionPanel
     margin-top: 3
     minimum: 0
     maximum: 4
-
-  Label
-    id: rightPanelsLabel
-    margin-top: 8
-    @onSetup: |
-      local value = modules.client_options.getOption('rightPanels')
-      self:setText(tr('Right side panels: %d', value))
-
-  OptionScrollbar
-    id: rightPanels
-    margin-top: 3
-    minimum: 1
-    maximum: 4
-
-  Panel
-    height: 30
-    margin-top: 10
-
-    LongButton
-      id: changeLocale
-      !text: tr('Change language')
-      @onClick: modules.client_locales.createWindow()
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: parent.top

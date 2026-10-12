@@ -262,6 +262,16 @@ local function getDisplayedResourceText(value, maxValue)
 	return tostring(value)
 end
 
+-- The top bars show "value / max"; with the percent option on they show the
+-- same percent as the labels, so no HP/MP number disagrees with another.
+local function getDisplayedBarText(value, maxValue)
+	if shouldForceFullHpMpLabels() then
+		return getDisplayedResourceText(value, maxValue)
+	end
+
+	return value .. " / " .. maxValue
+end
+
 function onHealthChange(localPlayer, health, maxHealth)
 	if maxHealth < health then
 		maxHealth = health
@@ -270,7 +280,7 @@ function onHealthChange(localPlayer, health, maxHealth)
 	healthInfoWindow:recursiveGetChildById("healthLabel"):setText(getDisplayedResourceText(health, maxHealth))
 	healthBar:setTooltip(tr(healthTooltip, health, maxHealth))
 	healthBar:setValue(health, 0, maxHealth)
-	topHealthBar:setText(health .. " / " .. maxHealth)
+	topHealthBar:setText(getDisplayedBarText(health, maxHealth))
 	topHealthBar:setTooltip(tr(healthTooltip, health, maxHealth))
 	topHealthBar:setValue(health, 0, maxHealth)
 
@@ -309,7 +319,7 @@ function onManaChange(localPlayer, mana, maxMana)
 	healthInfoWindow:recursiveGetChildById("manaLabel"):setText(getDisplayedResourceText(mana, maxMana))
 	manaBar:setTooltip(tr(manaTooltip, mana, maxMana))
 	manaBar:setValue(mana, 0, maxMana)
-	topManaBar:setText(mana .. " / " .. maxMana)
+	topManaBar:setText(getDisplayedBarText(mana, maxMana))
 	topManaBar:setTooltip(tr(manaTooltip, mana, maxMana))
 	topManaBar:setValue(mana, 0, maxMana)
 

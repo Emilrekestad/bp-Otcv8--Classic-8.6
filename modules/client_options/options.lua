@@ -51,6 +51,7 @@ local defaultOptions = {
 	rightPanels = 1,
 	showPrivateMessagesOnScreen = true,
 	showPrivateMessagesInConsole = true,
+	showLootMessagesOnScreen = false,
 	showLevelsInConsole = true,
 	showTimestampsInConsole = true,
 	showInfoMessagesInConsole = true,
@@ -78,7 +79,6 @@ local function createSubWindow(id, title, uiName, size)
 		width = 350,
 		height = 400
 	})
-	window:setDraggable(false)
 	window:hide()
 
 	if uiName then
@@ -130,7 +130,6 @@ function init()
 
 	optionsWindow = g_ui.displayUI("options")
 
-	optionsWindow:setDraggable(false)
 	optionsWindow:hide()
 
 	function optionsWindow.onEnter()
@@ -139,7 +138,7 @@ function init()
 
 	subWindows.general = createSubWindow("generalWindow", tr("General Options"), "game", {
 		width = 250,
-		height = 460
+		height = 490
 	})
 	subWindows.graphics = createSubWindow("graphicsWindow", tr("Graphics"), "graphics", {
 		width = 270,
@@ -437,8 +436,17 @@ function setOption(key, value, force)
 	elseif key == "displayText" then
 		gameMapPanel:setDrawTexts(value)
 	elseif key == "displayFullHpMpPercent" then
-		if modules.game_healthinfo and modules.game_healthinfo.refreshHealthManaDisplay then
-			modules.game_healthinfo.refreshHealthManaDisplay()
+		-- Both modules read the setting back from g_settings, which is only
+		-- written at the end of this function: store it first, or a toggle
+		-- shows the old mode until HP or MP next changes.
+		g_settings.set(key, value)
+
+		for _, name in ipairs({ "game_healthinfo", "game_topbar" }) do
+			local module = modules[name]
+
+			if module and module.refreshHealthManaDisplay then
+				module.refreshHealthManaDisplay()
+			end
 		end
 	elseif key == "dash" then
 		g_game.setMaxPreWalkingSteps(2)

@@ -1,3 +1,7 @@
+-- Matches the server's channel id for the automated "Loot" channel
+-- (data/scripts/chatchannels/loot.lua on tfs-source).
+local CHANNEL_LOOT = 10
+
 SpeakTypesSettings = {
 	none = {},
 	say = {
@@ -185,6 +189,13 @@ bugReportTab = nil
 playerReportTab = nil
 radioTabs = nil
 floatingMode = false
+-- Pinned channel: one tab lives in its own bar/pane on the right half of the
+-- console, view-only (the text edit only ever talks to consoleTabBar's
+-- current tab). Persisted per character in the "pinnedChannels" settings node.
+pinnedTabBar = nil
+pinnedContentPanel = nil
+pinnedChannelName = nil
+local PINNED_TAB_FIELDS = { "channelId", "npcChat", "violationChatName", "violations", "locked", "homeIndex" }
 local playerReportReasons = {
 	{ text = tr("Rule violation / abuse"), reason = 11 },
 	{ text = tr("Bug abuse"), reason = 12 },
@@ -226,6 +237,11 @@ function init()
 	consoleTabBar = consolePanel:recursiveGetChildById("consoleTabBar")
 
 	consoleTabBar:setContentWidget(consoleContentPanel)
+
+	local parentPanel = consolePanel:getChildById("parentPanel")
+	pinnedTabBar = g_ui.createWidget("ConsolePinnedTabBar", consolePanel)
+	pinnedContentPanel = g_ui.createWidget("ConsolePinnedContentPanel", parentPanel)
+	pinnedTabBar:setContentWidget(pinnedContentPanel)
 
 	channels = {}
 	consolePanel.onDragEnter = onDragEnter
@@ -280,7 +296,6 @@ function init()
 
 	g_keyboard.bindKeyDown("Ctrl+O", g_game.requestChannels, gameRootPanel)
 	g_keyboard.bindKeyDown("Ctrl+E", removeCurrentTab, gameRootPanel)
-	g_keyboard.bindKeyDown("Ctrl+H", openHelp, gameRootPanel)
 	g_keyboard.bindKeyDown("Ctrl+I", onClickIgnoreButton, gameRootPanel)
 
 	consoleToggleChat = consolePanel:recursiveGetChildById("toggleChat")
@@ -407,6 +422,19 @@ function isChatEnabled()
 	return consoleTextEdit:isVisible()
 end
 
+-- True when chat mode is on and keyCombo types a character into the chat line
+-- (a printable key or Space, alone or with Shift). Hotkeys bound to such keys
+-- must stay quiet while the player is writing.
+function isTypingKey(keyCombo)
+	if not keyCombo or not isChatEnabled() then
+		return false
+	end
+
+	local key = keyCombo:gsub("^[Ss]hift%+", ""):lower()
+
+	return key:len() == 1 or key == "space" or key == "plus"
+end
+
 function terminate()
 	save()
 	disconnect(g_game, {
@@ -433,7 +461,6 @@ function terminate()
 
 	g_keyboard.unbindKeyDown("Ctrl+O", gameRootPanel)
 	g_keyboard.unbindKeyDown("Ctrl+E", gameRootPanel)
-	g_keyboard.unbindKeyDown("Ctrl+H", gameRootPanel)
 	g_keyboard.unbindKeyDown("Ctrl+I", gameRootPanel)
 	saveCommunicationSettings()
 
@@ -458,6 +485,9 @@ function terminate()
 	consoleContentPanel = nil
 	consoleToggleChat = nil
 	consoleTextEdit = nil
+	pinnedTabBar = nil
+	pinnedContentPanel = nil
+	pinnedChannelName = nil
 
 	consolePanel:destroy()
 
@@ -514,9 +544,11 @@ function clear()
 	g_settings.setNode("lastChannelsOpen", lastChannelsOpen)
 
 	for _, channelName in pairs(channels) do
-		local tab = consoleTabBar:getTab(channelName)
+		local tab = getTab(channelName)
 
-		consoleTabBar:removeTab(tab)
+		if tab then
+			destroyTab(tab)
+		end
 	end
 
 	channels = {}
@@ -525,13 +557,15 @@ function clear()
 
 	defaultTab = nil
 
-	consoleTabBar:removeTab(serverTab)
+	if serverTab then
+		destroyTab(serverTab)
+	end
 
 	serverTab = nil
-	local npcTab = consoleTabBar:getTab("NPCs")
+	local npcTab = getTab("NPCs")
 
 	if npcTab then
-		consoleTabBar:removeTab(npcTab)
+		destroyTab(npcTab)
 
 		npcTab = nil
 	end
@@ -541,6 +575,11 @@ function clear()
 
 		violationReportTab = nil
 	end
+
+	-- the saved pin is kept so the channel comes back pinned on next login
+	collapsePinnedLayout()
+
+	pinnedChannelName = nil
 
 	consoleTextEdit:clearText()
 
@@ -725,6 +764,23 @@ function onReportTypeChange(radioTabs, selected, deselected)
 	deselected:setOn(false)
 end
 
+local function createTab(tabBar, name, panel)
+	local tab = tabBar:addTab(name, panel, processChannelTabMenu)
+
+	tab:setWidth(math.max(90, tab:getTextSize().width + 8))
+
+	return tab
+end
+
+-- Selecting a tab only makes sense in the main bar: the pinned bar's single
+-- tab is always current there, and pushing it through consoleTabBar:selectTab
+-- would drag its buffer back into the left pane.
+function focusTab(tab)
+	if tab and tab.tabBar == consoleTabBar then
+		consoleTabBar:selectTab(tab)
+	end
+end
+
 function addTab(name, focus)
 	local tab = getTab(name)
 
@@ -733,31 +789,41 @@ function addTab(name, focus)
 			focus = true
 		end
 	else
-		local newname = name
-
-		if newname:len() > 10 then
-			newname = name:sub(1, 10)
-			newname = newname .. "..."
-		end
-
-		tab = consoleTabBar:addTab(name, nil, processChannelTabMenu)
-
-		tab:setWidth(math.max(90, tab:getTextSize().width + 8))
+		tab = createTab(consoleTabBar, name)
 	end
 
 	if focus then
-		consoleTabBar:selectTab(tab)
+		focusTab(tab)
+	end
+
+	if pinnedChannelName and tab.tabBar == consoleTabBar and name:lower() == pinnedChannelName:lower() then
+		tab = pinTab(tab) or tab
 	end
 
 	return tab
 end
 
-function removeTab(tab)
-	if type(tab) == "string" then
-		tab = consoleTabBar:getTab(tab)
+-- Removes a tab from whichever bar owns it, destroying its buffer, and folds
+-- the split away if it was the pinned one. Does not touch the saved pin.
+function destroyTab(tab)
+	local tabBar = tab.tabBar or consoleTabBar
+	local wasPinned = tabBar == pinnedTabBar
+
+	tabBar:removeTab(tab)
+
+	if wasPinned then
+		collapsePinnedLayout()
 	end
 
-	if tab == defaultTab or tab == serverTab then
+	return wasPinned
+end
+
+function removeTab(tab)
+	if type(tab) == "string" then
+		tab = getTab(tab)
+	end
+
+	if not tab or tab == defaultTab or tab == serverTab then
 		return
 	end
 
@@ -783,7 +849,10 @@ function removeTab(tab)
 		consoleTabBar:selectTab(defaultTab)
 	end
 
-	consoleTabBar:removeTab(tab)
+	if destroyTab(tab) then
+		-- closing the pinned channel on purpose also forgets the pin
+		savePinnedChannel(nil)
+	end
 end
 
 function removeCurrentTab()
@@ -791,7 +860,191 @@ function removeCurrentTab()
 end
 
 function getTab(name)
-	return consoleTabBar:getTab(name)
+	local tab = consoleTabBar:getTab(name)
+
+	if not tab and pinnedTabBar then
+		tab = pinnedTabBar:getTab(name)
+	end
+
+	return tab
+end
+
+function getPinnedTab()
+	if pinnedTabBar then
+		return pinnedTabBar.tabs[1]
+	end
+
+	return nil
+end
+
+function canPinTab(tab)
+	if not tab or tab.tabBar ~= consoleTabBar then
+		return false
+	end
+
+	if tab == defaultTab or tab == violationReportTab or tab.violations or tab.violationChatName then
+		return false
+	end
+
+	return true
+end
+
+function savePinnedChannel(name)
+	pinnedChannelName = name
+
+	if not g_game.isOnline() then
+		return
+	end
+
+	local pinned = g_settings.getNode("pinnedChannels") or {}
+	pinned[g_game.getCharacterName()] = name
+
+	g_settings.setNode("pinnedChannels", pinned)
+end
+
+local function setSplitLayout(enabled)
+	if enabled then
+		consoleTabBar:addAnchor(AnchorRight, "parent", AnchorHorizontalCenter)
+		consoleTabBar:setMarginRight(1)
+		consoleContentPanel:addAnchor(AnchorRight, "parent", AnchorHorizontalCenter)
+		consoleContentPanel:setMarginRight(1)
+		pinnedTabBar:show()
+		pinnedContentPanel:show()
+	else
+		pinnedTabBar:hide()
+		pinnedContentPanel:hide()
+		consoleTabBar:addAnchor(AnchorRight, "parent", AnchorRight)
+		consoleTabBar:setMarginRight(0)
+		consoleContentPanel:addAnchor(AnchorRight, "parent", AnchorRight)
+		consoleContentPanel:setMarginRight(0)
+	end
+end
+
+function collapsePinnedLayout()
+	if not pinnedTabBar then
+		return
+	end
+
+	-- UIMoveableTabBar:removeTab leaves currentTab pointing at the destroyed
+	-- tab when the bar empties; clear it so the next addTab starts clean.
+	if #pinnedTabBar.tabs == 0 then
+		pinnedTabBar.currentTab = nil
+	end
+
+	setSplitLayout(false)
+end
+
+-- Moves a tab's buffer from one bar to the other. The tab button itself is
+-- rebuilt in the target bar (a tab belongs to the bar that created it); the
+-- panel with all its messages is kept. Returns the new tab.
+local function transferTab(tab, toBar, targetIndex)
+	local fromBar = tab.tabBar
+	local panel = tab.tabPanel
+	local name = tab:getText()
+	local fields = {}
+
+	for _, field in ipairs(PINNED_TAB_FIELDS) do
+		fields[field] = tab[field]
+	end
+
+	local wasServerTab = tab == serverTab
+
+	if fromBar:getCurrentTab() == tab and fromBar == consoleTabBar then
+		local fallback = defaultTab
+
+		if not fallback or fallback == tab then
+			for _, other in ipairs(fromBar.tabs) do
+				if other ~= tab then
+					fallback = other
+
+					break
+				end
+			end
+		end
+
+		if fallback and fallback ~= tab then
+			fromBar:selectTab(fallback)
+		end
+	end
+
+	-- detach the buffer: the library's tab.onDestroy would destroy it
+	tab.onDestroy = nil
+	fromBar:removeTab(tab)
+
+	if fromBar.currentTab == tab then
+		fromBar.currentTab = nil
+	end
+
+	if panel:getParent() then
+		panel:getParent():removeChild(panel)
+	end
+
+	local newTab = createTab(toBar, name, panel)
+
+	for field, value in pairs(fields) do
+		newTab[field] = value
+	end
+
+	panel.ownerTab = newTab
+
+	if wasServerTab then
+		serverTab = newTab
+	end
+
+	if targetIndex then
+		local currentIndex = table.find(toBar.tabs, newTab)
+
+		if currentIndex then
+			targetIndex = math.max(1, math.min(targetIndex, #toBar.tabs))
+			toBar:moveTab(newTab, targetIndex - currentIndex)
+		end
+	end
+
+	return newTab
+end
+
+function pinTab(tab)
+	if type(tab) == "string" then
+		tab = getTab(tab)
+	end
+
+	if not canPinTab(tab) then
+		return nil
+	end
+
+	local pinned = getPinnedTab()
+
+	if pinned then
+		unpinTab()
+	end
+
+	local name = tab:getText()
+	local homeIndex = table.find(consoleTabBar.tabs, tab)
+	local newTab = transferTab(tab, pinnedTabBar)
+	newTab.homeIndex = homeIndex
+
+	newTab:setTooltip(tr("Pinned channel. Right-click to unpin."))
+	setSplitLayout(true)
+	savePinnedChannel(name)
+
+	return newTab
+end
+
+function unpinTab()
+	local tab = getPinnedTab()
+
+	if not tab then
+		return nil
+	end
+
+	local newTab = transferTab(tab, consoleTabBar, tab.homeIndex)
+	newTab.homeIndex = nil
+
+	newTab:setTooltip("")
+	collapsePinnedLayout()
+	savePinnedChannel(nil)
+
+	return newTab
 end
 
 function getChannelTab(channelId)
@@ -851,7 +1104,7 @@ function addPrivateText(text, speaktype, name, isPrivateCommand, creatureName)
 
 		privateTab.npcChat = speaktype.npcChat
 	elseif focus then
-		consoleTabBar:selectTab(privateTab)
+		focusTab(privateTab)
 	end
 
 	addTabText(text, speaktype, privateTab, creatureName)
@@ -881,27 +1134,81 @@ function getHighlightedText(text)
 	return tmpData
 end
 
+-- NPC text marks the words worth asking about as {word}. Returns the
+-- setColoredText list (braces removed, keywords in highlightColor) and the
+-- keywords with their first/last character in that braceless text, which is
+-- what a console label shows and what UITextEdit:getTextPos counts in.
 function getNewHighlightedText(text, color, highlightColor)
 	local tmpData = {}
+	local keywords = {}
+	local length = 0
+	local pos = 1
 
-	for i, part in ipairs(text:split("{")) do
-		if i == 1 then
+	local function push(part, partColor)
+		if #part > 0 then
 			table.insert(tmpData, part)
-			table.insert(tmpData, color)
-		else
-			for j, part2 in ipairs(part:split("}")) do
-				if j == 1 then
-					table.insert(tmpData, part2)
-					table.insert(tmpData, highlightColor)
-				else
-					table.insert(tmpData, part2)
-					table.insert(tmpData, color)
-				end
-			end
+			table.insert(tmpData, partColor)
+
+			length = length + #part
 		end
 	end
 
-	return tmpData
+	while true do
+		local first, last, word = text:find("{([^{}]+)}", pos)
+
+		if not first then
+			break
+		end
+
+		push(text:sub(pos, first - 1), color)
+		table.insert(keywords, {
+			first = length + 1,
+			last = length + #word,
+			word = word
+		})
+		push(word, highlightColor)
+
+		pos = last + 1
+	end
+
+	push(text:sub(pos), color)
+
+	return tmpData, keywords
+end
+
+-- The keyword under the mouse in a console label built from
+-- getNewHighlightedText, or nil.
+local function getKeywordAt(label, mousePos)
+	local index = label:getTextPos(mousePos)
+
+	if not index or index < 0 then
+		return nil
+	end
+
+	-- getTextPos counts from 0
+	index = index + 1
+
+	for _, keyword in ipairs(label.keywords) do
+		if keyword.first <= index and index <= keyword.last then
+			return keyword.word
+		end
+	end
+
+	return nil
+end
+
+-- Hand cursor while the mouse is over a keyword. Tracked per label so every
+-- push gets exactly one pop, whichever way the hover ends.
+local function setKeywordCursor(label, on)
+	if on and not label.keywordCursor then
+		g_mouse.pushCursor("pointer")
+
+		label.keywordCursor = true
+	elseif not on and label.keywordCursor then
+		g_mouse.popCursor("pointer")
+
+		label.keywordCursor = nil
+	end
 end
 
 function getBBColorData(inputString, defaultHex)
@@ -993,12 +1300,18 @@ function addTabText(text, speaktype, tab, creatureName)
 
 	local checkBBData = true
 
-	if speaktype.npcChat and (g_game.getCharacterName() ~= creatureName or g_game.getCharacterName() == "Account Manager") then
-		local highlightData = getNewHighlightedText(text, speaktype.color, "#1f9ffe")
+	-- A recycled label may still hold the last message's keywords and cursor.
+	setKeywordCursor(label, false)
 
-		if #highlightData > 2 then
+	label.keywords = nil
+
+	if speaktype.npcChat and (g_game.getCharacterName() ~= creatureName or g_game.getCharacterName() == "Account Manager") then
+		local highlightData, keywords = getNewHighlightedText(text, speaktype.color, "#1f9ffe")
+
+		if #keywords > 0 then
 			label:setColoredText(highlightData)
 
+			label.keywords = keywords
 			checkBBData = false
 		end
 	end
@@ -1013,12 +1326,43 @@ function addTabText(text, speaktype, tab, creatureName)
 
 	label.name = creatureName
 
+	-- The tab button is rebuilt when a channel is pinned/unpinned (and a
+	-- destroyed widget loses its Lua fields), so the menus resolve the owning
+	-- tab through the panel at click time instead of capturing it here.
+	panel.ownerTab = tab
+
 	function consoleBuffer:onMouseRelease(mousePos, mouseButton)
-		processMessageMenu(mousePos, mouseButton, nil, nil, nil, tab)
+		processMessageMenu(mousePos, mouseButton, nil, nil, nil, panel.ownerTab or tab)
 	end
 
 	function label:onMouseRelease(mousePos, mouseButton)
-		processMessageMenu(mousePos, mouseButton, creatureName, text, self, tab)
+		-- A blue NPC keyword is said to the NPC when clicked, as if typed. A
+		-- drag that selected text is a copy, not a click.
+		if mouseButton == MouseLeftButton and self.keywords and not self:hasSelection() then
+			local keyword = getKeywordAt(self, mousePos)
+
+			if keyword then
+				sendMessage(keyword, panel.ownerTab or tab)
+
+				return true
+			end
+		end
+
+		processMessageMenu(mousePos, mouseButton, creatureName, text, self, panel.ownerTab or tab)
+	end
+
+	function label:onMouseMove(mousePos, mouseMoved)
+		setKeywordCursor(self, self.keywords ~= nil and getKeywordAt(self, mousePos) ~= nil)
+	end
+
+	function label:onHoverChange(hovered)
+		if not hovered then
+			setKeywordCursor(self, false)
+		end
+	end
+
+	function label:onDestroy()
+		setKeywordCursor(self, false)
 	end
 
 	function label:onMousePress(mousePos, button)
@@ -1154,9 +1498,23 @@ function processChannelTabMenu(tab, mousePos, mouseButton)
 		menu:addSeparator()
 	end
 
-	if consoleTabBar:getCurrentTab() == tab then
+	if tab.tabBar == pinnedTabBar then
+		menu:addOption(tr("Unpin Channel"), function ()
+			unpinTab()
+		end)
+		menu:addSeparator()
+	elseif canPinTab(tab) then
+		menu:addOption(tr("Pin Channel"), function ()
+			pinTab(tab)
+		end)
+		menu:addSeparator()
+	end
+
+	if tab.tabBar and tab.tabBar:getCurrentTab() == tab then
+		local tabBar = tab.tabBar
+
 		menu:addOption(tr("Clear Messages"), function ()
-			clearChannel(consoleTabBar)
+			clearChannel(tabBar)
 		end)
 		menu:addOption(tr("Save Messages"), function ()
 			local panel = consoleTabBar:getTabPanel(tab)
@@ -1565,9 +1923,9 @@ function onTalk(name, level, mode, message, channelId, creaturePos)
 		local staticMessage = message
 
 		if isNpcMode then
-			local highlightData = getNewHighlightedText(staticMessage, speaktype.color, "#1f9ffe")
+			local highlightData, keywords = getNewHighlightedText(staticMessage, speaktype.color, "#1f9ffe")
 
-			if #highlightData > 2 then
+			if #keywords > 0 then
 				staticText:addColoredMessage(name, mode, highlightData)
 			else
 				staticText:addMessage(name, mode, staticMessage)
@@ -1627,6 +1985,10 @@ function onTalk(name, level, mode, message, channelId, creaturePos)
 		else
 			pwarning("message in channel id " .. channelId .. " which is unknown, this is a server bug, relogin if you want to see messages in this channel")
 		end
+
+		if channelId == CHANNEL_LOOT and modules.client_options.getOption("showLootMessagesOnScreen") then
+			modules.game_textmessage.displayGameMessage(message)
+		end
 	end
 end
 
@@ -1655,14 +2017,10 @@ function onCloseChannel(channelId)
 		local tab = getTab(channel)
 
 		if tab then
-			consoleTabBar:removeTab(tab)
+			destroyTab(tab)
 		end
 
-		for k, v in pairs(channels) do
-			if k == tab.channelId then
-				channels[k] = nil
-			end
-		end
+		channels[channelId] = nil
 	end
 end
 
@@ -2073,6 +2431,9 @@ function onClickIgnoreButton()
 end
 
 function online()
+	local pinnedChannels = g_settings.getNode("pinnedChannels") or {}
+	pinnedChannelName = pinnedChannels[g_game.getCharacterName()]
+
 	defaultTab = addTab(tr("Default"), true)
 	serverTab = addTab(tr("Server Log"), false)
 

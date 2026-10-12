@@ -276,6 +276,31 @@ function loadIcon(bitChanged)
 	return icon
 end
 
+-- "Show HP and MP as a percentage" (client_options displayFullHpMpPercent)
+-- applies here as well as in game_healthinfo, so every HP/MP number agrees.
+local function getBarText(value, maxValue)
+	if g_settings.getBoolean("displayFullHpMpPercent") then
+		if maxValue > 0 then
+			return math.max(0, math.min(100, math.floor((value * 100) / maxValue))) .. "%"
+		end
+
+		return "0%"
+	end
+
+	return comma_value(value) .. " / " .. comma_value(maxValue)
+end
+
+function refreshHealthManaDisplay()
+	local localPlayer = g_game.isOnline() and g_game.getLocalPlayer()
+
+	if not localPlayer then
+		return
+	end
+
+	onHealthChange(localPlayer, localPlayer:getHealth(), localPlayer:getMaxHealth())
+	onManaChange(localPlayer, localPlayer:getMana(), localPlayer:getMaxMana())
+end
+
 function onHealthChange(localPlayer, health, maxHealth)
 	if not healthBar then
 		return
@@ -287,7 +312,7 @@ function onHealthChange(localPlayer, health, maxHealth)
 
 	local healthPercent = health / maxHealth * 100
 
-	healthBar:setText(comma_value(health) .. " / " .. comma_value(maxHealth))
+	healthBar:setText(getBarText(health, maxHealth))
 	healthBar:setValue(health, 0, maxHealth)
 	healthBar:setPercent(healthPercent)
 
@@ -321,7 +346,7 @@ function onManaChange(localPlayer, mana, maxMana)
 		return
 	end
 
-	manaBar:setText(comma_value(mana) .. " / " .. comma_value(maxMana))
+	manaBar:setText(getBarText(mana, maxMana))
 	manaBar:setValue(mana, 0, maxMana)
 	manaBar:setPercent(manaPercent)
 end

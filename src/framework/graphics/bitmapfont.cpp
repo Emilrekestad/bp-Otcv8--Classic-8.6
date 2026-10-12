@@ -319,13 +319,17 @@ std::string BitmapFont::wrapText(const std::string& text, int maxWidth, std::vec
             }
             if (text[lastSeparator] == ' ') { // ignore space if it's first character in new line
                 c -= 1;
+                updateColors(colors, lastColorSeparator, -1);
                 lastSeparator += 1;
                 lastColorSeparator += 1;
             }
             for (size_t j = lastSeparator; j < i; ++j) { // copy word
                 outText += text[j];
             }
-            updateColors(colors, lastColorSeparator, 1);
+            // the '-' is a drawn glyph at position c: it takes the colour of the
+            // character before it and pushes every later colour range on by one
+            updateColors(colors, (int)c - 1, 1);
+            c += 1;
             outText += '-'; // word continuation
             outText += '\n'; // new line
 
@@ -339,12 +343,15 @@ std::string BitmapFont::wrapText(const std::string& text, int maxWidth, std::vec
 
     lineLength += wordLength;
     if (lineLength > maxWidth) { // too long line with this word
+        // the space before the last word becomes the line break, so it is no
+        // longer drawn: colour ranges after it move back by one (this was +1,
+        // which coloured the last word one letter late: "{trade}!" -> "t" + "rade!")
         if (text[lastSeparator] == ' ') { // ignore space if it's first character in new line
+            updateColors(colors, lastColorSeparator, -1);
             lastSeparator += 1;
             lastColorSeparator += 1;
         }
 
-        updateColors(colors, lastColorSeparator, 1);
         outText += '\n';
         lineLength = wordLength;
     }
