@@ -1,148 +1,171 @@
-GiftCoinsLabel < Label
-  color: #C0C0C0
+// Gift BPC.
+//
+// Styled from the templates declared in game_store.otui (StoreButton,
+// StoreWell, StoreBalanceWidget, ...), which are registered by the time this
+// file is displayed: game_store.lua's create() runs displayUI('game_store')
+// before createTransferWindow().
+//
+// This dialog now opens OVER the store rather than replacing it, so the balance
+// the player is about to give away stays on screen while they decide how much
+// of it to give.
+
+GiftLabel < Label
+  font: verdana-11px-monochrome
+  color: #c8c8c8
 
 MainWindow
   id: transferWindow
-  !text: tr('Gift Tibia Coins')
-  size: 280 238
-  color: #909090
+  !text: tr('Gift BPC')
+  size: 330 316
   @onEscape: modules.game_store.cancelGiftCoins()
-  $on:
-    size: 280 300
+  @onEnter: modules.game_store.confirmGiftCoins()
 
-  GiftCoinsLabel
+  GiftLabel
+    id: intro
     anchors.top: parent.top
     anchors.left: parent.left
     anchors.right: parent.right
-    margin-top: 4
+    height: 44
+    text-align: topLeft
     text-wrap: true
-    height: 56
-    text: Please select the amount of Tibia Coins you like to gift and enter the name of the character that should receive the Tibia Coins.
+    color: #9a9a9a
+    !text: tr('Coins are taken from your balance immediately and delivered to the character you name. Make sure the spelling is right -- a gift cannot be recalled.')
 
-  GiftCoinsLabel
+  // --- what you have ----------------------------------------------------
+  StoreWell
+    id: balanceWell
     anchors.top: prev.bottom
     anchors.left: parent.left
+    anchors.right: parent.right
     margin-top: 10
-    text: Recipient:
+    height: 34
+
+    GiftLabel
+      id: balanceCaption
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      margin-left: 10
+      color: #9a9a9a
+      !text: tr('Transferable balance')
+
+  // (!) A DIRECT child of the window, not of balanceWell: game_store.lua
+  // reaches it with transferWindow:getChildById('coinsBalance'), and
+  // UIWidget::getChildById does not recurse. It is anchored onto the well
+  // instead. This was a live nil-index crash before the fix.
+  GiftLabel
+    id: coinsBalance
+    anchors.right: balanceWell.right
+    anchors.verticalCenter: balanceWell.verticalCenter
+    margin-right: 10
+    text-align: right
+    text-horizontal-auto-resize: true
+    font: verdana-11px-rounded
+    color: #f0c674
+    !text: tr('0 BPC')
+
+  // --- who gets it ------------------------------------------------------
+  GiftLabel
+    id: recipientCaption
+    anchors.top: balanceWell.bottom
+    anchors.left: parent.left
+    margin-top: 14
+    height: 20
+    text-align: left
+    !text: tr('Recipient')
 
   TextEdit
     id: recipient
     anchors.verticalCenter: prev.verticalCenter
     anchors.right: parent.right
-    width: 150
-    text-align: left
+    width: 190
+    height: 20
+    font: verdana-11px-monochrome
+    color: #f6f1e2
+    placeholder: Character name
+    placeholder-color: #6f6f6f
+    text-align: center
 
-  GiftCoinsLabel
-    id: coinsBalance
-    anchors.top: prev.bottom
+  // --- how much ---------------------------------------------------------
+  GiftLabel
+    id: amountCaption
+    anchors.top: recipientCaption.bottom
     anchors.left: parent.left
-    margin-top: 10
+    margin-top: 14
+    height: 20
     text-align: left
-    text-horizontal-auto-resize: true
-    text: Transferable Tibia Coins:
+    !text: tr('Amount to gift')
 
   UIWidget
-    anchors.left: prev.right
-    anchors.verticalcenter: prev.verticalcenter
+    id: amountCoin
+    anchors.right: parent.right
+    anchors.verticalCenter: amountCaption.verticalCenter
     image-source: /images/store/coin
-    margin-left: 6
+    size: 12 12
     phantom: true
 
-  GiftCoinsLabel
-    id: coinsAmountLabel
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    margin-top: 10
-    text-align: left
-    text-horizontal-auto-resize: true
-    text: Amount to gift: 0
-
-  UIWidget
-    anchors.left: prev.right
-    anchors.verticalcenter: prev.verticalcenter
-    image-source: /images/store/coin
-    margin-left: 6
-    phantom: true
+  // The exact amount is typed here; the slider below follows it and the other
+  // way round (game_store.lua, changeCoinsAmount / onGiftAmountTyped). Gold,
+  // because it is a coin amount -- the one colour rule this window set shares
+  // with the store and the Bazaar.
+  TextEdit
+    id: coinsAmountEdit
+    anchors.verticalCenter: amountCaption.verticalCenter
+    anchors.right: amountCoin.left
+    margin-right: 6
+    width: 110
+    height: 20
+    font: verdana-11px-monochrome
+    color: #f0c674
+    placeholder: 0
+    placeholder-color: #6f6f6f
+    text-align: center
+    max-length: 10
+    @onTextChange: modules.game_store.onGiftAmountTyped(self:getText())
 
   HorizontalScrollBar
     id: coinsAmountScrollbar
-    anchors.top: prev.bottom
+    anchors.top: amountCaption.bottom
     anchors.left: parent.left
     anchors.right: parent.right
-    margin-top: 10
+    margin-top: 6
     step: 1
     minimum: 0
     maximum: 0
     @onValueChange: modules.game_store.changeCoinsAmount(self:getValue())
 
-  GiftCoinsLabel
-    id: taskPointsBalance
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    margin-top: 10
-    text-align: left
-    text-horizontal-auto-resize: true
-    text: Transferable Task points:
-
-  UIWidget
-    id: taskPointsCoin
-    anchors.left: prev.right
-    anchors.verticalcenter: prev.verticalcenter
-    image-source: /images/store/giftcoin
-    margin-left: 6
-    phantom: true
-
-  GiftCoinsLabel
-    id: taskPointsAmountLabel
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    margin-top: 10
-    text-align: left
-    text-horizontal-auto-resize: true
-    text: Amount to gift: 0
-
-  UIWidget
-    id: taskPointsLabelCoin
-    anchors.left: prev.right
-    anchors.verticalcenter: prev.verticalcenter
-    image-source: /images/store/giftcoin
-    margin-left: 6
-    phantom: true
-
-  HorizontalScrollBar
-    id: taskPointsAmountScrollbar
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    anchors.right: parent.right
-    margin-top: 10
-    step: 25
-    minimum: 0
-    maximum: 0
-    @onValueChange: modules.game_store.changeTaskPointsAmount(self:getValue())
-
-  HorizontalSeparator
-    anchors.right: parent.right
-    anchors.left: parent.left
-    anchors.bottom: cancelButton.top
-    margin-bottom: 8    
-
-  Button
-    id: cancelButton
-    !text: tr('Cancel')
-    font: cipsoftFont
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-    size: 45 21
-    margin-top: 15
-    margin-right: 5
-    @onClick: modules.game_store.cancelGiftCoins()
-
-  Button
+  // --- chrome -----------------------------------------------------------
+  StoreButton
     id: giftButton
     !text: tr('Gift')
-    font: cipsoftFont
-    size: 45 21
-    anchors.verticalCenter: prev.verticalCenter
-    anchors.right: prev.left
-    margin-right: 5
+    width: 78
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    image-color: #5f9e4f
     @onClick: modules.game_store.confirmGiftCoins()
+
+    $hover !disabled:
+      image-color: #77bd63
+
+  StoreButton
+    id: cancelButton
+    !text: tr('Cancel')
+    width: 78
+    anchors.right: prev.left
+    anchors.bottom: prev.bottom
+    margin-right: 6
+    @onClick: modules.game_store.cancelGiftCoins()
+
+  // Its own full-width row above the buttons, not the sliver beside them: a
+  // sentence squeezed into the ~126px left of the two buttons wrapped to four
+  // lines inside a one-line label and rendered as "Enter the name of the".
+  Label
+    id: statusLine
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: cancelButton.top
+    margin-bottom: 10
+    height: 30
+    text-align: topLeft
+    text-wrap: true
+    font: verdana-11px-monochrome
+    color: #e8825c

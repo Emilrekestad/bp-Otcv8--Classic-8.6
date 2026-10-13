@@ -2556,10 +2556,52 @@ function setGiftStatus(text, isError)
   label:setColor(isError and COLOR_URGENT or COLOR_POSITIVE)
 end
 
-function changeCoinsAmount(value)
-  if transferWindow then
-    transferWindow:getChildById("coinsAmountLabel"):setText(comma_value(value) .. " " .. CURRENCY)
+-- The amount is both typed (coinsAmountEdit) and dragged (the slider). The
+-- slider holds the number confirmGiftCoins reads; the edit mirrors it. This
+-- flag stops the two from answering each other forever.
+local syncingGiftAmount = false
+
+local function setGiftAmountText(edit, text)
+  if edit:getText() == text then
+    return
   end
+
+  syncingGiftAmount = true
+  edit:setText(text)
+  syncingGiftAmount = false
+end
+
+-- Slider moved (or was set from code): show its value in the edit. Zero shows
+-- as an empty box with the "0" hint.
+function changeCoinsAmount(value)
+  if not transferWindow or syncingGiftAmount then
+    return
+  end
+
+  value = math.floor(tonumber(value) or 0)
+  setGiftAmountText(transferWindow:getChildById("coinsAmountEdit"), value > 0 and tostring(value) or "")
+end
+
+-- Typed into the edit: keep digits only, cap at the balance, move the slider.
+function onGiftAmountTyped(text)
+  if not transferWindow or syncingGiftAmount then
+    return
+  end
+
+  local edit = transferWindow:getChildById("coinsAmountEdit")
+  local digits = (text or ""):gsub("%D", "")
+  local amount = tonumber(digits) or 0
+
+  if amount > premiumPoints then
+    amount = premiumPoints
+  end
+
+  setGiftAmountText(edit, amount > 0 and tostring(amount) or "")
+  edit:setCursorPos(-1)
+
+  syncingGiftAmount = true
+  transferWindow:getChildById("coinsAmountScrollbar"):setValue(amount)
+  syncingGiftAmount = false
 end
 
 function changeTaskPointsAmount(value)
