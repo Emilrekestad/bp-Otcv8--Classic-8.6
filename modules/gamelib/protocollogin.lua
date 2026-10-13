@@ -401,10 +401,18 @@ end
 
 -- 0xA1, sent straight after the 0x65 list: today's boosted creature and boss.
 -- It MUST be read even though nothing shows it yet, or the rest of the
--- message would be read as opcodes.
+-- message would be read as opcodes. Each entry is built by
+-- addBoostedLoginEntry (tfs-source/src/protocollogin.cpp): a "valid" byte,
+-- and only when it is 1 the u32 race id, the name and the outfit. (Until
+-- 2026-10-13 this read name + outfit straight away, ran out of data on every
+-- login and logged "InputMessage eof reached".)
 function ProtocolLogin:parseBoostedInfo(msg)
   local function readEntry()
     local entry = {}
+    if msg:getU8() == 0 then
+      return entry
+    end
+    entry.raceId = msg:getU32()
     entry.name = msg:getString()
     entry.outfit = {
       type = msg:getU16(),

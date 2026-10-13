@@ -309,32 +309,97 @@ function registerBestiaryProtocol()
 		end
 	end)
 	
+	-- The server (data/scripts/network/cyclopedia/ciclopedia.lua,
+	-- sendBestiaryMonster) writes the WHOLE record at every detail level: loot
+	-- names and counts, stats, elements, locations, the charm block and the
+	-- two Soulpit bytes. Until 2026-10-13 this handler read only the parts the
+	-- level had unlocked, and returned without reading anything when the
+	-- Bestiary tab was not the one showing. The engine carries on parsing
+	-- after a Lua handler (protocolgameparse.cpp), so every unread byte became
+	-- an opcode -- and loot-name letters ARE the map opcodes (0x64 'd' full
+	-- map, 0x6D 'm' creature move, ...). The client then rewrote its map from
+	-- garbage: black tiles, creatures that never moved, the character walking
+	-- in place (owner, a Cyclops with one kill). Read everything, always; only
+	-- SHOW by level.
+	local function readBestiaryMonsterPacket(msg)
+		local data = {}
+		data.raceId = msg:getU16()
+		data.class = msg:getString()
+		data.outfit = readCyclopediaCreatureOutfit(msg)
+		data.level = msg:getU8()
+		data.kills = msg:getU32()
+		data.firstUnlock = msg:getU16()
+		data.secondUnlock = msg:getU16()
+		data.toKill = msg:getU16()
+		data.stars = msg:getU8()
+		data.occurrence = msg:getU8()
+
+		data.loot = {}
+		local lootCount = msg:getU8()
+		for i = 1, lootCount do
+			local itemId = msg:getU16()
+			local tier = msg:getU8()
+			msg:getU8() -- special event, always 0
+			local name = msg:getString()
+			local countMax = msg:getU8()
+			data.loot[i] = { itemId, tier, name, countMax }
+		end
+
+		data.charmPoints = msg:getU16()
+		msg:getU8() -- attack mode, always 0
+		msg:getU8() -- unused, always 0
+		data.health = msg:getU32()
+		data.experience = msg:getU32()
+		data.speed = msg:getU16()
+		data.armor = msg:getU16()
+
+		data.elements = {}
+		local elementCount = msg:getU8()
+		for i = 1, elementCount do
+			data.elements[i] = { id = msg:getU8(), percent = msg:getU16() }
+		end
+
+		data.locations = {}
+		local locationCount = msg:getU16()
+		for i = 1, locationCount do
+			data.locations[i] = msg:getString()
+		end
+
+		if msg:getU8() > 0 then
+			data.charmId = msg:getU8()
+			data.charmRemoveCost = msg:getU32()
+		else
+			msg:getU8()
+		end
+
+		-- Soulpit mastery: the two bytes the server appends at the very end.
+		data.soulpitMastered = msg:getU8() == 1
+		data.soulpitExpBonus = msg:getU8()
+		return data
+	end
+
 	registerOpcode(BestiaryMonsterData, function(protocol, msg)
+		local data = readBestiaryMonsterPacket(msg)
+		protoData[data.raceId] = data.outfit
+
 		if not isBestiaryView() or not bestiaryContainer or not bestiaryMonster then
 			return
 		end
 		bestiaryContainer:hide()
 		bestiaryMonster:show()
-		
-		-- Start of the info
-		local raceId, class = msg:getU16(), msg:getString()
-		local raceOutfit = readCyclopediaCreatureOutfit(msg)
-		protoData[raceId] = raceOutfit
-		selectedBestiaryRaceId = raceId
+
+		local raceOutfit = data.outfit
+		local currentLevel = data.level
+		selectedBestiaryRaceId = data.raceId
 		bestiaryMonster:setText(firstToUpper(raceOutfit and raceOutfit.name or "unknown"))
 		if raceOutfit then
 			bestiaryMonster.bestiaryCreature:setOutfit(raceOutfit)
 		end
-		
-		local currentLevel = msg:getU8()
-		local killCounter = msg:getU32()
-		local bestiaryFirstUnlock = msg:getU16()
-		local bestiarySecondUnlock = msg:getU16()
-		local bestiaryToUnlock = msg:getU16()
-		
-		local firstUnlock = math.max(bestiaryFirstUnlock, 1)
-		local secondUnlock = math.max(bestiarySecondUnlock, firstUnlock)
-		local toUnlock = math.max(bestiaryToUnlock, secondUnlock)
+
+		local killCounter = data.kills
+		local firstUnlock = math.max(data.firstUnlock, 1)
+		local secondUnlock = math.max(data.secondUnlock, firstUnlock)
+		local toUnlock = math.max(data.toKill, secondUnlock)
 		local cappedKills = math.min(killCounter, toUnlock)
 		local progressPercent
 		if cappedKills < firstUnlock then
@@ -344,116 +409,48 @@ function registerBestiaryProtocol()
 		else
 			progressPercent = 66.66 + (((cappedKills - secondUnlock) * 33.34) / math.max(toUnlock - secondUnlock, 1))
 		end
-		
+
 		bestiaryMonster.totalKillsLabel:setText(killCounter)
 		bestiaryMonster.progressBar:setPercent(math.min(100, progressPercent))
-		
+
 		-- Bestiary Stars
-		local bestiaryStars = msg:getU8()
+		local bestiaryStars = data.stars
 		for s = 1, 5 do
 			starsContainer:getChildById("stars"..s):setTooltip(starsLevels[bestiaryStars])
-			
-			if (s > bestiaryStars) then
-				starsContainer:getChildById("stars"..s):setOn(false)
-			else
-				starsContainer:getChildById("stars"..s):setOn(true)
-			end
+			starsContainer:getChildById("stars"..s):setOn(s <= bestiaryStars)
 		end
-	
+
 		-- Bestiary Occurence
-		local bestiaryOccurrence = msg:getU8()
+		local bestiaryOccurrence = data.occurrence
 		for o = 1, 4 do
 			occurrenceContainer:getChildById("occurrence"..o):setTooltip(occurenceLevels[bestiaryOccurrence])
-			
-			if (o > bestiaryOccurrence) then
-				occurrenceContainer:getChildById("occurrence"..o):setOn(false)
-			else
-				occurrenceContainer:getChildById("occurrence"..o):setOn(true)
-			end
+			occurrenceContainer:getChildById("occurrence"..o):setOn(o <= bestiaryOccurrence)
 		end
-	
-		local lootList = msg:getU8()
-		local tierLoot = {}	
-		for i = 1, lootList do
-			local itemId = msg:getU16()
-			local difficult = msg:getU8()
-			local specialEvent = msg:getU8()
-			local lootName = ""
-			local countMax = 0
-			
-			if (currentLevel > 1) then
-				lootName = msg:getString()
-				countMax = msg:getU8()
-			end
 
-			table.insert(tierLoot, {
-				itemId, difficult, lootName, countMax
-			})
-		end
-		
-		-- Loot Setup
+		-- Loot Setup: names and item pictures only from detail level 2.
+		local tierLoot = data.loot
 		if lootContainer then
 			lootContainer:destroyChildren()
 		end
 		for a = 0, 4 do
 			local rarityLoot = g_ui.createWidget('BestiaryLoot', lootContainer)
 			rarityLoot.rarityLevel:setText(lootRarityLevel[a])
-			
-			-- All loot slots
+
 			local lootSlots = {rarityLoot.c_loot01, rarityLoot.c_loot02, rarityLoot.c_loot03, rarityLoot.c_loot04, rarityLoot.c_loot05, rarityLoot.c_loot06, rarityLoot.c_loot07, rarityLoot.c_loot08, rarityLoot.c_loot09, rarityLoot.c_loot10, rarityLoot.c_loot11, rarityLoot.c_loot12, rarityLoot.c_loot13, rarityLoot.c_loot14, rarityLoot.c_loot15}
-			
+
 			local difficultyList = {}
-			if a == 0 then
-				for i = 1, #tierLoot do
-					if (tierLoot[i][2] == a) then
-						table.insert(difficultyList, {
-							itemId = tierLoot[i][1],
-							name = tierLoot[i][3]
-						})
-					end
-				end
-			elseif a == 1 then
-				for i = 1, #tierLoot do
-					if (tierLoot[i][2] == a) then
-						table.insert(difficultyList, {
-							itemId = tierLoot[i][1],
-							name = tierLoot[i][3]
-						})
-					end
-				end
-			elseif a == 2 then
-				for i = 1, #tierLoot do
-					if (tierLoot[i][2] == a) then
-						table.insert(difficultyList, {
-							itemId = tierLoot[i][1],
-							name = tierLoot[i][3]
-						})
-					end
-				end
-			elseif a == 3 then
-				for i = 1, #tierLoot do
-					if (tierLoot[i][2] == a) then
-						table.insert(difficultyList, {
-							itemId = tierLoot[i][1],
-							name = tierLoot[i][3]
-						})
-					end
-				end
-			elseif a == 4 then
-				for i = 1, #tierLoot do
-					if (tierLoot[i][2] == a) then
-						table.insert(difficultyList, {
-							itemId = tierLoot[i][1],
-							name = tierLoot[i][3]
-						})
-					end
+			for i = 1, #tierLoot do
+				if tierLoot[i][2] == a then
+					table.insert(difficultyList, {
+						itemId = tierLoot[i][1],
+						name = tierLoot[i][3]
+					})
 				end
 			end
-			
-			-- Loot calculation
+
 			for i = 1, #lootSlots do
 				if difficultyList[i] then
-					if (currentLevel > 1) then
+					if currentLevel > 1 then
 						lootSlots[i]:setItemId(difficultyList[i].itemId)
 						lootSlots[i]:setTooltip(firstToUpper(difficultyList[i].name))
 					else
@@ -463,24 +460,16 @@ function registerBestiaryProtocol()
 					lootSlots[i]:disable()
 				end
 			end
-			
+
 			rarityLoot:setMarginTop(5 + ((a-1) * 40))
 		end
-		
+
 		if currentLevel > 1 then
-			local charmPoints = msg:getU16()
-			local attackMode = msg:getU8()
-			local unknownPacket = msg:getU8()
-			local healthMax = msg:getU32()
-			local experience = msg:getU32()
-			local baseSpeed = msg:getU16()
-			local armor = msg:getU16()
-	
-			bestiaryMonster.charmAmount:setText(charmPoints)
-			bestiaryMonster.healthAmount:setText(healthMax)
-			bestiaryMonster.experienceAmount:setText(experience)
-			bestiaryMonster.speedAmount:setText(baseSpeed)
-			bestiaryMonster.armorAmount:setText(armor)
+			bestiaryMonster.charmAmount:setText(data.charmPoints)
+			bestiaryMonster.healthAmount:setText(data.health)
+			bestiaryMonster.experienceAmount:setText(data.experience)
+			bestiaryMonster.speedAmount:setText(data.speed)
+			bestiaryMonster.armorAmount:setText(data.armor)
 		else
 			bestiaryMonster.charmAmount:setText("?")
 			bestiaryMonster.healthAmount:setText("?")
@@ -489,12 +478,11 @@ function registerBestiaryProtocol()
 			bestiaryMonster.armorAmount:setText("?")
 			bestiaryMonster.locationTextfield:setText("?")
 		end
-		
+
 		-- Elements setup
 		local elements = {bestiaryMonster.physicalAmount, bestiaryMonster.earthAmount, bestiaryMonster.fireAmount, bestiaryMonster.deathAmount, bestiaryMonster.energyAmount, bestiaryMonster.holyAmount, bestiaryMonster.iceAmount, bestiaryMonster.healingAmount}
-		
+
 		if currentLevel > 2 then
-			-- Element Table Initialize
 			local elementWidgetTable = {
 				[0] = bestiaryMonster.physicalAmount,
 				[1] = bestiaryMonster.fireAmount,
@@ -505,67 +493,47 @@ function registerBestiaryProtocol()
 				[6] = bestiaryMonster.deathAmount,
 				[7] = bestiaryMonster.healingAmount
 			}
-			
-			-- Basic setup for all elements
-			for a = 1, #elements do 
+
+			for a = 1, #elements do
 				elements[a]:setPercent(68) -- Means 100%
 			end
-			
-			-- Actual element Setup
-			local elementsList = msg:getU8()
-			for b = 1, elementsList do
-				local elementId, elementPercent = msg:getU8(), msg:getU16()
-				-- We change each element depending on which element has been altered
-				if elementWidgetTable[elementId] then
-					local elementFormula = (elementPercent / 100)
-					if (elementPercent == 0) then
-						progressPercent = 0
-					elseif (elementPercent == 100) then
-						progressPercent = 68
+
+			for _, element in ipairs(data.elements) do
+				local widget = elementWidgetTable[element.id]
+				if widget then
+					local elementPercent = element.percent
+					local percent
+					if elementPercent == 0 then
+						percent = 0
+					elseif elementPercent == 100 then
+						percent = 68
 					else
-						progressPercent = elementFormula * 68
+						percent = (elementPercent / 100) * 68
 					end
-					
-					elementWidgetTable[elementId]:setPercent(progressPercent)
-					if (elementPercent > 100) then
-						elementWidgetTable[elementId]:setBackgroundColor("#18ce18")
-					elseif (elementPercent < 100) then
-						elementWidgetTable[elementId]:setBackgroundColor("#ae0f0f")
-					elseif (elementPercent == 100) then
-						elementWidgetTable[elementId]:setBackgroundColor("#ffffff")
+
+					widget:setPercent(percent)
+					if elementPercent > 100 then
+						widget:setBackgroundColor("#18ce18")
+					elseif elementPercent < 100 then
+						widget:setBackgroundColor("#ae0f0f")
+					else
+						widget:setBackgroundColor("#ffffff")
 					end
 				end
 			end
-		
-			-- Location
-			local locations = msg:getU16()
-			local locationsList = {}
-			for i = 1, locations do
-				locationsList[#locationsList + 1] = msg:getString()
-			end
-			
-			bestiaryMonster.locationTextfield:setText(formatLocations(locationsList))
+
+			bestiaryMonster.locationTextfield:setText(formatLocations(data.locations))
 		else
 			bestiaryMonster.locationTextfield:setText("?")
 			for c = 1, #elements do
 				elements[c]:setPercent(0)
 			end
 		end
-		
-		-- Charms (Not done)
-		if currentLevel > 3 then
-			local hascharm = msg:getU8()
-			if hascharm > 0 then
-				msg:getU8()
-				msg:getU32()
-			else
-				msg:getU8()
-			end
-		end
+
 		if scheduleBestiaryMonsterRefresh then
 			scheduleBestiaryMonsterRefresh()
 		end
-	  end)
+	end)
 
 	registerOpcode(BestiaryMessage, function(protocol, msg)
 		local message = msg:getString()
