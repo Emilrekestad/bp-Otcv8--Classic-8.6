@@ -244,43 +244,15 @@ function onMiniWindowClose()
 	end
 end
 
-local function shouldForceFullHpMpLabels()
-	return g_settings.getBoolean("displayFullHpMpPercent")
-end
-
-local function getDisplayedResourceText(value, maxValue)
-	if shouldForceFullHpMpLabels() then
-		if maxValue and maxValue > 0 then
-			local percent = math.floor((value * 100) / maxValue)
-			percent = math.max(0, math.min(100, percent))
-			return percent .. "%"
-		end
-
-		return "0%"
-	end
-
-	return tostring(value)
-end
-
--- The top bars show "value / max"; with the percent option on they show the
--- same percent as the labels, so no HP/MP number disagrees with another.
-local function getDisplayedBarText(value, maxValue)
-	if shouldForceFullHpMpLabels() then
-		return getDisplayedResourceText(value, maxValue)
-	end
-
-	return value .. " / " .. maxValue
-end
-
 function onHealthChange(localPlayer, health, maxHealth)
 	if maxHealth < health then
 		maxHealth = health
 	end
 
-	healthInfoWindow:recursiveGetChildById("healthLabel"):setText(getDisplayedResourceText(health, maxHealth))
+	healthInfoWindow:recursiveGetChildById("healthLabel"):setText(health)
 	healthBar:setTooltip(tr(healthTooltip, health, maxHealth))
 	healthBar:setValue(health, 0, maxHealth)
-	topHealthBar:setText(getDisplayedBarText(health, maxHealth))
+	topHealthBar:setText(health .. " / " .. maxHealth)
 	topHealthBar:setTooltip(tr(healthTooltip, health, maxHealth))
 	topHealthBar:setValue(health, 0, maxHealth)
 
@@ -316,10 +288,10 @@ function onManaChange(localPlayer, mana, maxMana)
 		maxMana = mana
 	end
 
-	healthInfoWindow:recursiveGetChildById("manaLabel"):setText(getDisplayedResourceText(mana, maxMana))
+	healthInfoWindow:recursiveGetChildById("manaLabel"):setText(mana)
 	manaBar:setTooltip(tr(manaTooltip, mana, maxMana))
 	manaBar:setValue(mana, 0, maxMana)
-	topManaBar:setText(getDisplayedBarText(mana, maxMana))
+	topManaBar:setText(mana .. " / " .. maxMana)
 	topManaBar:setTooltip(tr(manaTooltip, mana, maxMana))
 	topManaBar:setValue(mana, 0, maxMana)
 

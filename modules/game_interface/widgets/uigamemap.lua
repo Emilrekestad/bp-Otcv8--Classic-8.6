@@ -5,10 +5,13 @@ function UIGameMap.create()
 
 	gameMap:setKeepAspectRatio(true)
 	gameMap:setVisibleDimension({
-		height = 11,
-		width = 15
+		height = 13,
+		width = 19
 	})
 	gameMap:setDrawLights(true)
+	-- Fixed, not a player setting (owner 2026-10-13): caves stay dark, so light
+	-- comes from utevo lux, torches and other light sources.
+	gameMap:setMinimumAmbientLight(0.14)
 
 	gameMap.markedThing = nil
 	gameMap.blockNextRelease = 0

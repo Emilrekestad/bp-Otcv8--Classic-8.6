@@ -18,12 +18,8 @@ local defaultOptions = {
 	showFps = true,
 	hdmodeBox = true,
 	vsync = true,
-	botSoundVolume = 0,
 	floorFading = 100,
 	crosshair = 1,
-	ambientLight = 50,
-	optimizationLevel = 1,
-	musicSoundVolume = 0,
 	displayHealth = true,
 	displayMana = false,
 	displayHealthOnTop = false,
@@ -51,11 +47,8 @@ local defaultOptions = {
 	hotkeyDelay = 30,
 	turnDelay = 100,
 	displayText = true,
-	displayFullHpMpPercent = false,
 	topHealtManaBar = false,
 	hidePlayerBars = true,
-	enableMusicSound = false,
-	enableAudio = true,
 	backgroundFrameRate = 60,
 	containerPanel = 8,
 	displayNames = true,
@@ -83,7 +76,7 @@ extraOptions = {}
 
 -- Section order on the rail. The id is both the nav button's id and the
 -- suffix of its content panel ("section-<id>").
-local SECTIONS = { "controls", "interface", "graphics", "audio", "console", "actionbars", "hotkeys", "about" }
+local SECTIONS = { "controls", "interface", "graphics", "console", "actionbars", "hotkeys", "about" }
 
 -- The frame rate combo is a list of stops, not a slider: nobody wants 137 fps.
 -- Index 6 is the engine's "no limit" (setMaxFps(0)).
@@ -103,7 +96,6 @@ local SEARCH_WORDS = {
 	displayHealth = "hp bars creatures",
 	displayHealthOnTop = "hp bars creatures overlap",
 	displayMana = "mp bars",
-	displayFullHpMpPercent = "hp mp percent numbers health mana",
 	showPing = "latency lag ms connection",
 	showFps = "fps frames per second performance",
 	vsync = "tearing refresh rate performance",
@@ -112,11 +104,6 @@ local SEARCH_WORDS = {
 	antialiasing = "smoothing sharp pixels",
 	hdmodeBox = "hd sprites resolution sharp",
 	backgroundFrameRate = "fps frame limit performance cap",
-	optimizationLevel = "performance quality lag",
-	ambientLight = "brightness dark night light",
-	enableAudio = "sound mute volume",
-	enableMusicSound = "music song mute",
-	musicSoundVolume = "music loudness volume",
 	showInfoMessagesInConsole = "chat log messages",
 	showEventMessagesInConsole = "chat log messages",
 	showStatusMessagesInConsole = "chat log messages",
@@ -134,7 +121,6 @@ local SECTION_WORDS = {
 	controls = "keyboard mouse walking movement",
 	interface = "hud panels layout bars names",
 	graphics = "video display light",
-	audio = "sound music volume mute",
 	console = "chat log messages channels",
 	actionbars = "hotbar action bars buttons",
 	hotkeys = "keys binds shortcuts macros",
@@ -455,13 +441,6 @@ function init()
 	g_keyboard.bindKeyDown("Ctrl+N", toggleDisplays)
 
 	optionsButton = modules.client_topmenu.addLeftButton("optionsButton", tr("Options"), "/images/topbuttons/options", toggle)
-	audioButton = modules.client_topmenu.addLeftButton("audioButton", tr("Audio"), "/images/topbuttons/audio", function()
-		toggleOption("enableAudio")
-	end)
-
-	if g_app.isMobile() then
-		audioButton:hide()
-	end
 
 	addEvent(function()
 		setup()
@@ -481,7 +460,6 @@ function terminate()
 	g_keyboard.unbindKeyDown("Ctrl+N")
 	optionsWindow:destroy()
 	optionsButton:destroy()
-	audioButton:destroy()
 
 	rows = {}
 	sectionPanels = {}
@@ -489,6 +467,11 @@ function terminate()
 end
 
 function setup()
+	-- Full quality for everyone (owner 2026-10-13): the old "Optimization level"
+	-- option throttled what the map draws, and Automatic drifted there by itself.
+	-- Level 0 = no limit on effects, creatures, items or damage numbers.
+	g_adaptiveRenderer.setLevel(0)
+
 	for k, v in pairs(defaultOptions) do
 		if type(v) == "boolean" then
 			setOption(k, g_settings.getBoolean(k), true)
@@ -655,34 +638,6 @@ function setOption(key, value, force)
 		addEvent(function()
 			modules.game_interface.updateStretchShrink()
 		end)
-	elseif key == "enableAudio" then
-		if g_sounds ~= nil then
-			g_sounds.setAudioEnabled(value)
-		end
-
-		if value then
-			audioButton:setIcon("/images/topbuttons/audio")
-		else
-			audioButton:setIcon("/images/topbuttons/audio_mute")
-		end
-	elseif key == "enableMusicSound" then
-		if g_sounds ~= nil then
-			g_sounds.getChannel(SoundChannels.Music):setEnabled(value)
-		end
-	elseif key == "musicSoundVolume" then
-		if g_sounds ~= nil then
-			g_sounds.getChannel(SoundChannels.Music):setGain(value / 100)
-		end
-
-		local label = optionsWindow and optionsWindow:recursiveGetChildById("musicSoundVolumeLabel")
-
-		if label then
-			label:setText(tr("Music volume: %d", value))
-		end
-	elseif key == "botSoundVolume" then
-		if g_sounds ~= nil then
-			g_sounds.getChannel(SoundChannels.Bot):setGain(value / 100)
-		end
 	elseif key == "backgroundFrameRate" then
 		local fps = value
 
@@ -693,17 +648,6 @@ function setOption(key, value, force)
 		g_app.setMaxFps(fps)
 	elseif key == "crosshair" then
 		gameMapPanel:setCrosshair("")
-	elseif key == "ambientLight" then
-		gameMapPanel:setMinimumAmbientLight(value / 100)
-		gameMapPanel:setDrawLights(value < 100)
-
-		local label = optionsWindow and optionsWindow:recursiveGetChildById("ambientLightLabel")
-
-		if label then
-			label:setText(tr("Ambient light: %s%%", value))
-		end
-	elseif key == "optimizationLevel" then
-		g_adaptiveRenderer.setLevel(value - 2)
 	elseif key == "displayNames" then
 		gameMapPanel:setDrawNames(value)
 	elseif key == "displayHealth" then
@@ -714,19 +658,6 @@ function setOption(key, value, force)
 		gameMapPanel:setDrawHealthBarsOnTop(value)
 	elseif key == "displayText" then
 		gameMapPanel:setDrawTexts(value)
-	elseif key == "displayFullHpMpPercent" then
-		-- Both modules read the setting back from g_settings, which is only
-		-- written at the end of this function: store it first, or a toggle
-		-- shows the old mode until HP or MP next changes.
-		g_settings.set(key, value)
-
-		for _, name in ipairs({ "game_healthinfo", "game_topbar" }) do
-			local module = modules[name]
-
-			if module and module.refreshHealthManaDisplay then
-				module.refreshHealthManaDisplay()
-			end
-		end
 	elseif key == "dash" then
 		g_game.setMaxPreWalkingSteps(2)
 	elseif key == "wsadWalking" then
@@ -782,13 +713,11 @@ function getOption(key)
 end
 
 function online()
-	setLightOptionsVisibility(not g_game.getFeature(GameForceLight))
 	g_app.setSmooth(g_settings.getBoolean("antialiasing"))
 	setHotkeysAvailable(true)
 end
 
 function offline()
-	setLightOptionsVisibility(true)
 	setHotkeysAvailable(false)
 end
 
@@ -807,22 +736,5 @@ function setHotkeysAvailable(value)
 
 	if note then
 		note:setVisible(not value)
-	end
-end
-
-function setLightOptionsVisibility(value)
-	if not optionsWindow then
-		return
-	end
-
-	local label = optionsWindow:recursiveGetChildById("ambientLightLabel")
-	local slider = optionsWindow:recursiveGetChildById("ambientLight")
-
-	if label then
-		label:setEnabled(value)
-	end
-
-	if slider then
-		slider:setEnabled(value)
 	end
 end

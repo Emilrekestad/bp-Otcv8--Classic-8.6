@@ -35,6 +35,12 @@ OptionComboBox < ComboBox
   text-offset: 5 2
   @onOptionChange: modules.client_options.setOption(self:getId(), self.currentIndex)
 
+// UIComboBox opens its list as <style name>PopupMenu, and the list's rows as
+// <that>Button. Without these two a click on an OptionComboBox threw a Lua
+// error and no list opened (only the mouse wheel could change the value).
+OptionComboBoxPopupMenu < ComboBoxPopupMenu
+OptionComboBoxPopupMenuButton < ComboBoxPopupMenuButton
+
 // ---------------------------------------------------------------------------
 // Surfaces
 // ---------------------------------------------------------------------------
@@ -173,10 +179,6 @@ MainWindow
       !text: tr('Graphics')
 
     OptNavItem
-      id: audio
-      !text: tr('Audio')
-
-    OptNavItem
       id: console
       !text: tr('Console')
 
@@ -309,13 +311,6 @@ MainWindow
 
       OptCheckRow
         OptionCheckBox
-          id: displayFullHpMpPercent
-          !text: tr('Show HP and MP as a percentage')
-          anchors.fill: parent
-          margin: 5
-
-      OptCheckRow
-        OptionCheckBox
           id: showPing
           !text: tr('Show ping')
           !tooltip: tr('Connection speed to the server, in milliseconds')
@@ -390,89 +385,6 @@ MainWindow
           anchors.verticalCenter: parent.verticalCenter
           margin-right: 6
           @onOptionChange: modules.client_options.setFrameRateIndex(self.currentIndex)
-
-      OptValueRow
-        OptLabel
-          !text: tr('Optimization level')
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          margin-left: 8
-          height: 16
-          width: 200
-
-        OptionComboBox
-          id: optimizationLevel
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          margin-right: 6
-          @onSetup: |
-            self:addOption("Automatic")
-            self:addOption("None")
-            self:addOption("Low")
-            self:addOption("Medium")
-            self:addOption("High")
-            self:addOption("Maximum")
-
-      OptSliderRow
-        id: ambientLightRow
-
-        OptLabel
-          id: ambientLightLabel
-          !text: tr('Ambient light: %s%%', 50)
-          anchors.top: parent.top
-          anchors.left: parent.left
-          anchors.right: parent.right
-          margin: 6 8 0 8
-          height: 16
-
-        OptionScrollbar
-          id: ambientLight
-          anchors.top: prev.bottom
-          anchors.left: parent.left
-          anchors.right: parent.right
-          margin: 4 8 0 8
-          minimum: 0
-          maximum: 50
-
-    // -----------------------------------------------------------------
-    OptSectionPanel
-      id: section-audio
-
-      OptHeading
-        !text: tr('Audio')
-
-      OptCheckRow
-        OptionCheckBox
-          id: enableAudio
-          !text: tr('Enable sound')
-          anchors.fill: parent
-          margin: 5
-
-      OptCheckRow
-        OptionCheckBox
-          id: enableMusicSound
-          !text: tr('Enable music')
-          anchors.fill: parent
-          margin: 5
-
-      OptSliderRow
-        OptLabel
-          id: musicSoundVolumeLabel
-          !text: tr('Music volume: %d', 100)
-          anchors.top: parent.top
-          anchors.left: parent.left
-          anchors.right: parent.right
-          margin: 6 8 0 8
-          height: 16
-
-        OptionScrollbar
-          id: musicSoundVolume
-          anchors.top: prev.bottom
-          anchors.left: parent.left
-          anchors.right: parent.right
-          margin: 4 8 0 8
-          minimum: 0
-          maximum: 100
 
     // -----------------------------------------------------------------
     OptSectionPanel
