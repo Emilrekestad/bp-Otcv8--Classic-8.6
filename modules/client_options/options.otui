@@ -1,166 +1,789 @@
+// Options. One window: a section rail on the left, the settings on the right,
+// and a search box over both. Replaces the old hub-plus-four-sub-windows
+// arrangement (options.otui + game/graphics/console/custom.otui).
+//
+// Every surface is one of the client's own assets -- see docs/client-ui-guide.md
+// §1 for the measured depth stack. The only fills here are `background-color:
+// alpha` on labels, which means "do not paint".
+
+// ---------------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------------
+
+// The names OptionCheckBox / OptionScrollbar are kept from the old file: they
+// are what setOption's widget sync recognises by __class.
 OptionCheckBox < CheckBox
   @onCheckChange: modules.client_options.setOption(self:getId(), self:isChecked())
   height: 16
+  font: verdana-11px-monochrome
+  color: #c8c8c8
+
+  $hover:
+    color: #f6f1e2
 
 OptionScrollbar < HorizontalScrollBar
   step: 1
   @onValueChange: modules.client_options.setOption(self:getId(), self:getValue())
 
-OptionPanel < Panel
+// A count is not a continuous value, so it does not get a slider.
+OptionSpinBox < SpinBox
+  size: 74 22
+  @onValueChange: modules.client_options.setOption(self:getId(), self:getValue())
+
+OptionComboBox < ComboBox
+  width: 170
+  text-offset: 5 2
+  @onOptionChange: modules.client_options.setOption(self:getId(), self.currentIndex)
+
+// ---------------------------------------------------------------------------
+// Surfaces
+// ---------------------------------------------------------------------------
+
+// RAISED. One setting sits on one of these.
+OptRow < Panel
+  auto-focus: none
+  image-source: /images/ui/2pixel-up-frame-borderimage
+  image-border: 2
+  image-color: #c8c8c8
+  height: 26
+  margin-bottom: 4
+
+OptCheckRow < OptRow
+  height: 26
+
+OptValueRow < OptRow
+  height: 32
+
+OptSliderRow < OptRow
+  height: 48
+
+// SUNKEN. The well the sections scroll inside.
+OptWell < ScrollablePanel
+  image-source: /images/ui/panel_flat
+  image-border: 1
+  image-color: #a4a4a4
+  padding: 6
+  auto-focus: none
   layout:
     type: verticalBox
+
+OptSectionPanel < Panel
+  auto-focus: none
+  layout:
+    type: verticalBox
+    fit-children: true
+  margin-bottom: 6
+
+OptHeading < Label
+  font: Verdana Bold-16px
+  color: #f6f1e2
+  height: 22
+  margin-bottom: 6
+  background-color: alpha
+
+OptLabel < Label
+  font: verdana-11px-monochrome
+  color: #c8c8c8
+  background-color: alpha
+  text-auto-resize: false
+
+OptNote < Label
+  font: verdana-11px-monochrome
+  color: #7f7f7f
+  background-color: alpha
+
+OptSep < UIWidget
+  height: 2
+  image-source: /images/ui/separator_horizontal
+  image-border: 1
+  phantom: true
+  focusable: false
+
+// The section rail. The section you are in switches to the frame's LIGHT
+// weight, exactly as the Hirelings rail does.
+OptNavItem < UIButton
+  height: 30
+  margin-bottom: 3
+  image-source: /images/ui/2pixel-up-frame-borderimage
+  image-border: 2
+  image-color: #c8c8c8
+  font: verdana-11px-rounded
+  color: #b8b8b8
+  text-align: left
+  text-offset: 10 0
+  change-cursor-image: true
+  cursor: pointer
+  @onClick: modules.client_options.selectSection(self:getId())
+
+  $hover !checked:
+    image-color: #e8e8e8
+    color: #ffffff
+
+  $checked:
+    image-color: #ffffff
+    color: #ffffff
+
+OptButton < Button
+  height: 22
+  width: 120
+
+// ---------------------------------------------------------------------------
 
 MainWindow
   id: optionsWindow
   !text: tr('Options')
-  size: 285 300
+  size: 640 480
   @onEscape: modules.client_options.hide()
 
-  LongButton
-    id: GeneralButton
-    !text: tr('General')
-    width: 90
+  TextEdit
+    id: searchEdit
+    height: 24
     anchors.top: parent.top
     anchors.left: parent.left
-    @onClick: modules.client_options.toggleSubWindow('general')
+    anchors.right: parent.right
+    font: verdana-11px-monochrome
+    color: #f6f1e2
+    placeholder-color: #7f7f7f
+    padding-left: 6
+    !placeholder: tr('Search settings...')
+    @onTextChange: modules.client_options.onSearchChange(self:getText())
+    @onEscape: modules.client_options.clearSearch()
 
-  LongButton
-    id: GraphicsButton
-    !text: tr('Graphics')
-    width: 90
+  Panel
+    id: navRail
+    width: 132
     anchors.top: prev.bottom
     anchors.left: parent.left
-    margin-top: 15
-    @onClick: modules.client_options.toggleSubWindow('graphics')
+    anchors.bottom: bottomSeparator.top
+    margin-top: 8
+    margin-bottom: 8
+    layout:
+      type: verticalBox
 
-  LongButton
-    id: ConsoleButton
-    !text: tr('Console')
-    width: 90
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    margin-top: 15
-    @onClick: modules.client_options.toggleSubWindow('console')
+    OptNavItem
+      id: controls
+      !text: tr('Controls')
 
-  LongButton
-    id: HotkeysButton
-    !text: tr('Hotkeys')
-    width: 90
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    margin-top: 15
-    @onClick: |
-      modules.game_hotkeys.toggle()
-      modules.client_options.hide()
+    OptNavItem
+      id: interface
+      !text: tr('Interface')
 
-  LongButton
-    id: ActionbarsButton
-    !text: tr('Actionbars')
-    width: 90
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    margin-top: 15
-    @onClick: modules.client_options.toggleSubWindow('actionbars')
+    OptNavItem
+      id: graphics
+      !text: tr('Graphics')
 
-  LongButton
-    id: MotdButton
-    !text: tr('Motd')
-    width: 90
-    anchors.top: prev.bottom
-    anchors.left: parent.left
-    margin-top: 15
-    @onClick: |
-      if modules.motd and modules.motd.toggle then
-        modules.motd.toggle()
-      elseif modules.game_motd and modules.game_motd.toggle then
-        modules.game_motd.toggle()
-      end
-      modules.client_options.hide()
+    OptNavItem
+      id: audio
+      !text: tr('Audio')
 
-  Label
-    id: GeneralButtonText
-    !text: tr('Change general')
-    anchors.top: GeneralButton.top
-    anchors.left: GeneralButton.left
-    margin-left: 100
-    @onClick: modules.client_options.toggleSubWindow('general')
+    OptNavItem
+      id: console
+      !text: tr('Console')
 
-  Label
-    !text: tr('game options')
-    anchors.top: GeneralButtonText.top
-    anchors.left: GeneralButtonText.left
-    margin-top: 12
-    @onClick: modules.client_options.toggleSubWindow('general')
+    OptNavItem
+      id: actionbars
+      !text: tr('Action Bars')
 
-  Label
-    id: GraphicsButtonText
-    !text: tr('Change graphics and')
-    anchors.top: GraphicsButton.top
-    anchors.left: GraphicsButton.left
-    margin-left: 100
-    @onClick: modules.client_options.toggleSubWindow('graphics')
+    OptNavItem
+      id: hotkeys
+      !text: tr('Hotkeys')
 
-  Label
-    !text: tr('performance settings')
-    anchors.top: GraphicsButtonText.top
-    anchors.left: GraphicsButtonText.left
-    margin-top: 12
-    @onClick: modules.client_options.toggleSubWindow('graphics')
+    OptNavItem
+      id: about
+      !text: tr('About')
 
-  Label
-    id: ConsoleButtonText
-    !text: tr('Customise the console')
-    anchors.top: ConsoleButton.top
-    anchors.left: ConsoleButton.left
-    margin-left: 100
-    @onClick: modules.client_options.toggleSubWindow('console')
+  OptWell
+    id: contentWell
+    anchors.top: navRail.top
+    anchors.left: navRail.right
+    anchors.right: parent.right
+    anchors.bottom: navRail.bottom
+    margin-left: 10
+    vertical-scrollbar: contentScrollBar
 
-  Label
-    id: HotkeysButtonText
-    !text: tr('Edit your hotkeys text')
-    anchors.top: HotkeysButton.top
-    anchors.left: HotkeysButton.left
-    margin-left: 100
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-controls
 
-  Label
-    id: ActionbarsButtonText
-    !text: tr('Customize your action bars')
-    anchors.top: ActionbarsButton.top
-    anchors.left: ActionbarsButton.left
-    margin-left: 100
-    @onClick: modules.client_options.toggleSubWindow('actionbars')
+      OptHeading
+        !text: tr('Controls')
 
-  HorizontalSeparator
+      OptCheckRow
+        OptionCheckBox
+          id: classicControl
+          !text: tr('Tibia classic control')
+          !tooltip: tr('Right-click opens the menu; left-click uses and attacks')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: autoChaseOverride
+          !text: tr('Auto chase off')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: wsadWalking
+          !text: tr('Walk with W A S D')
+          !tooltip: tr('Turns chat off so the letter keys walk instead')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: smartWalk
+          !text: tr('Smart walking')
+          !tooltip: tr('Steps diagonally based on the keys you are holding')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: moveFullStack
+          !text: tr('Move stack directly')
+          !tooltip: tr('Drag a stack to move all of it at once.\nHold Ctrl to choose how many. Hold Shift to move one.')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: displayText
+          !text: tr('Show text messages on screen')
+          anchors.fill: parent
+          margin: 5
+
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-interface
+
+      OptHeading
+        !text: tr('Interface')
+
+      OptValueRow
+        OptLabel
+          id: leftPanelsLabel
+          !text: tr('Side panels on the left')
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          margin-left: 8
+          height: 16
+          width: 220
+
+        OptionSpinBox
+          id: leftPanels
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          margin-right: 6
+          minimum: 0
+          maximum: 4
+
+      OptCheckRow
+        OptionCheckBox
+          id: displayNames
+          !text: tr('Show creature names')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: displayHealth
+          !text: tr('Show creature health bars')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: displayHealthOnTop
+          !text: tr('Draw health bars above names')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: displayMana
+          !text: tr('Show mana bars')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: displayFullHpMpPercent
+          !text: tr('Show HP and MP as a percentage')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showPing
+          !text: tr('Show ping')
+          !tooltip: tr('Connection speed to the server, in milliseconds')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showFps
+          !text: tr('Show frame rate')
+          anchors.fill: parent
+          margin: 5
+
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-graphics
+
+      OptHeading
+        !text: tr('Graphics')
+
+      OptCheckRow
+        OptionCheckBox
+          id: vsync
+          !text: tr('Vertical sync')
+          !tooltip: tr('Caps the frame rate to the monitor refresh rate')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: fullscreen
+          !text: tr('Fullscreen')
+          tooltip: Ctrl+Shift+F
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: dontStretchShrink
+          !text: tr('Do not stretch the game window')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: antialiasing
+          !text: tr('Antialiasing')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: hdmodeBox
+          !text: tr('HD graphics')
+          anchors.fill: parent
+          margin: 5
+
+      OptValueRow
+        OptLabel
+          !text: tr('Frame rate limit')
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          margin-left: 8
+          height: 16
+          width: 200
+
+        // Its own handler: the combo reports an index, the setting is an fps
+        // number, and the generic handler would store the index.
+        OptionComboBox
+          id: backgroundFrameRate
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          margin-right: 6
+          @onOptionChange: modules.client_options.setFrameRateIndex(self.currentIndex)
+
+      OptValueRow
+        OptLabel
+          !text: tr('Optimization level')
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          margin-left: 8
+          height: 16
+          width: 200
+
+        OptionComboBox
+          id: optimizationLevel
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          margin-right: 6
+          @onSetup: |
+            self:addOption("Automatic")
+            self:addOption("None")
+            self:addOption("Low")
+            self:addOption("Medium")
+            self:addOption("High")
+            self:addOption("Maximum")
+
+      OptSliderRow
+        id: ambientLightRow
+
+        OptLabel
+          id: ambientLightLabel
+          !text: tr('Ambient light: %s%%', 50)
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
+          margin: 6 8 0 8
+          height: 16
+
+        OptionScrollbar
+          id: ambientLight
+          anchors.top: prev.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          margin: 4 8 0 8
+          minimum: 0
+          maximum: 50
+
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-audio
+
+      OptHeading
+        !text: tr('Audio')
+
+      OptCheckRow
+        OptionCheckBox
+          id: enableAudio
+          !text: tr('Enable sound')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: enableMusicSound
+          !text: tr('Enable music')
+          anchors.fill: parent
+          margin: 5
+
+      OptSliderRow
+        OptLabel
+          id: musicSoundVolumeLabel
+          !text: tr('Music volume: %d', 100)
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
+          margin: 6 8 0 8
+          height: 16
+
+        OptionScrollbar
+          id: musicSoundVolume
+          anchors.top: prev.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          margin: 4 8 0 8
+          minimum: 0
+          maximum: 100
+
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-console
+
+      OptHeading
+        !text: tr('Console')
+
+      OptCheckRow
+        OptionCheckBox
+          id: showInfoMessagesInConsole
+          !text: tr('Show info messages')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showEventMessagesInConsole
+          !text: tr('Show event messages')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showStatusMessagesInConsole
+          !text: tr('Show status messages')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showTimestampsInConsole
+          !text: tr('Show timestamps')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showLevelsInConsole
+          !text: tr('Show levels next to names')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showPrivateMessagesInConsole
+          !text: tr('Show private messages in the console')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showPrivateMessagesOnScreen
+          !text: tr('Show private messages on screen')
+          anchors.fill: parent
+          margin: 5
+
+      OptCheckRow
+        OptionCheckBox
+          id: showLootMessagesOnScreen
+          !text: tr('Show loot on screen even with the Loot channel open')
+          anchors.fill: parent
+          margin: 5
+
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-actionbars
+
+      OptHeading
+        !text: tr('Action Bars')
+
+      OptLabel
+        !text: tr('Bottom')
+        height: 16
+        margin-bottom: 4
+
+      OptCheckRow
+        id: actionbarBottomRow
+        height: 26
+
+        OptionCheckBox
+          id: actionbar1
+          !text: tr('Bar 1')
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          margin-left: 8
+          width: 120
+
+        OptionCheckBox
+          id: actionbar2
+          !text: tr('Bar 2')
+          anchors.left: prev.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 120
+
+        OptionCheckBox
+          id: actionbar3
+          !text: tr('Bar 3')
+          anchors.left: prev.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 120
+
+      OptLabel
+        !text: tr('Left side')
+        height: 16
+        margin-bottom: 4
+
+      OptCheckRow
+        id: actionbarLeftRow
+        height: 26
+
+        OptionCheckBox
+          id: actionbar4
+          !text: tr('Bar 1')
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          margin-left: 8
+          width: 120
+
+        OptionCheckBox
+          id: actionbar5
+          !text: tr('Bar 2')
+          anchors.left: prev.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 120
+
+        OptionCheckBox
+          id: actionbar6
+          !text: tr('Bar 3')
+          anchors.left: prev.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 120
+
+      OptLabel
+        !text: tr('Right side')
+        height: 16
+        margin-bottom: 4
+
+      OptCheckRow
+        id: actionbarRightRow
+        height: 26
+
+        OptionCheckBox
+          id: actionbar7
+          !text: tr('Bar 1')
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          margin-left: 8
+          width: 120
+
+        OptionCheckBox
+          id: actionbar8
+          !text: tr('Bar 2')
+          anchors.left: prev.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 120
+
+        OptionCheckBox
+          id: actionbar9
+          !text: tr('Bar 3')
+          anchors.left: prev.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 120
+
+      OptCheckRow
+        OptionCheckBox
+          id: actionbarLock
+          !text: tr('Disable action bar hotkeys while chatting')
+          anchors.fill: parent
+          margin: 5
+
+      OptValueRow
+        OptLabel
+          !text: tr('Client feature profile')
+          !tooltip: tr('Which saved set of panels and bars this client uses')
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          margin-left: 8
+          height: 16
+          width: 200
+
+        OptionComboBox
+          id: profile
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          margin-right: 6
+          @onSetup: |
+            for i = 1, 10 do
+              self:addOption(tostring(i))
+            end
+
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-hotkeys
+
+      OptHeading
+        !text: tr('Hotkeys')
+
+      OptNote
+        !text: tr('Hotkeys are edited in their own window, where each key can be\nbound to a word, a spell or an item.')
+        height: 32
+        text-wrap: true
+        margin-bottom: 8
+
+      Panel
+        id: hotkeysButtonRow
+        height: 26
+        auto-focus: none
+
+        OptButton
+          id: openHotkeysButton
+          !text: tr('Edit hotkeys')
+          anchors.left: parent.left
+          anchors.top: parent.top
+          @onClick: |
+            modules.game_hotkeys.toggle()
+            modules.client_options.hide()
+
+      OptNote
+        id: hotkeysOfflineNote
+        !text: tr('Available once you are in the game.')
+        height: 16
+        margin-top: 6
+        visible: false
+
+    // -----------------------------------------------------------------
+    OptSectionPanel
+      id: section-about
+
+      OptHeading
+        !text: tr('About')
+
+      OptLabel
+        id: aboutVersion
+        !text: tr('BackpackOT Client')
+        height: 32
+        text-wrap: true
+        margin-bottom: 8
+
+      Panel
+        id: aboutButtonRow
+        height: 26
+        auto-focus: none
+
+        OptButton
+          id: motdButton
+          !text: tr('Message of the Day')
+          width: 160
+          anchors.left: parent.left
+          anchors.top: parent.top
+          @onClick: |
+            if modules.game_motd and modules.game_motd.toggle then
+              modules.game_motd.toggle()
+            end
+            modules.client_options.hide()
+
+      Panel
+        id: aboutLinksRow
+        height: 26
+        auto-focus: none
+
+        OptButton
+          id: websiteButton
+          !text: tr('backpackot.com')
+          width: 160
+          anchors.left: parent.left
+          anchors.top: parent.top
+          @onClick: g_platform.openUrl("https://backpackot.com")
+
+        OptButton
+          id: compendiumButton
+          !text: tr('Compendium')
+          width: 160
+          anchors.left: prev.right
+          anchors.top: parent.top
+          margin-left: 8
+          @onClick: g_platform.openUrl("https://backpackot.com/compendium")
+
+  VerticalScrollBar
+    id: contentScrollBar
+    anchors.top: contentWell.top
+    anchors.bottom: contentWell.bottom
+    anchors.right: contentWell.right
+    step: 26
+    minimum: 0
+    maximum: 0
+    margin-top: 2
+    margin-right: 2
+    margin-bottom: 2
+    pixels-scroll: true
+
+  OptNote
+    id: searchStatus
     anchors.left: parent.left
     anchors.right: parent.right
-    anchors.top: prev.bottom
-    margin-top: 20
+    anchors.bottom: bottomSeparator.top
+    margin-bottom: 4
+    height: 14
+    visible: false
 
-  Label
-    id: MotdButtonText
-    !text: tr('Show the most recent')
-    anchors.top: MotdButton.top
-    anchors.left: MotdButton.left
-    margin-left: 100
-    @onClick: modules.client_options.toggleSubWindow('motd')
-
-  Label
-    !text: tr('Message of the Day')
-    anchors.top: MotdButtonText.top
-    anchors.left: MotdButtonText.left
-    margin-top: 12
-    @onClick: modules.client_options.toggleSubWindow('motd')
-
-  HorizontalSeparator
+  OptSep
+    id: bottomSeparator
     anchors.left: parent.left
     anchors.right: parent.right
-    anchors.top: prev.bottom
-    margin-top: 12
+    anchors.bottom: closeButton.top
+    margin-bottom: 8
 
   Button
     id: closeButton
     !text: tr('Ok')
-    width: 50
+    width: 60
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     @onClick: modules.client_options.hide()

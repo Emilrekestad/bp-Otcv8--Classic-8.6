@@ -1,6 +1,74 @@
+// Character select. Deliberately small and quiet: a portrait, a name, a line
+// of detail, and a pin. Nothing else on screen.
+//
+// The reading order is portrait -> name -> level, so the pin sits on the far
+// right, out of that path, dim until it is either hovered or set. A hairline
+// under the last pinned row explains the ordering without a sentence of help
+// text.
+//
+// Surfaces are the client's own assets; see docs/client-ui-guide.md §1.
+
+// SUNKEN. The container the rows sit in.
+CLList < TextList
+  image-source: /images/ui/panel_flat
+  image-border: 1
+  image-color: #a4a4a4
+  padding: 3
+  auto-focus: none
+
+// A RECESS for a picture: 1px inset, transparent centre, so the plate behind
+// shows through. An outfit is a picture, not an item in a slot.
+CLFrame < UIWidget
+  image-source: /images/ui/1pixel-down-frame
+  image-border: 1
+  phantom: true
+  focusable: false
+
+CLSep < UIWidget
+  height: 2
+  image-source: /images/ui/separator_horizontal
+  image-border: 1
+  phantom: true
+  focusable: false
+
+// The divider between the pinned characters and the rest: the same engraved
+// rule, with a little air around it.
+CLPinDivider < CLSep
+  margin-top: 3
+  margin-bottom: 5
+  margin-left: 6
+  margin-right: 6
+
+// The mark. A 9px diamond, not a drawn pushpin: at this size any picture of a
+// pin is mush, and a plain geometric mark reads as deliberate. Barely there
+// until it means something -- dim idle, cream when the character is marked.
+// Never gold; gold means money everywhere else in this client.
+CLPin < UIButton
+  size: 11 11
+  icon-source: /images/ui/pin
+  icon-size: 9 9
+  icon-offset: 1 1
+  icon-color: #565656
+  change-cursor-image: true
+  cursor: pointer
+  !tooltip: tr('Keep this character at the top (Ctrl+P).\nPins are saved on this computer.')
+
+  $hover !checked:
+    icon-color: #a8a8a8
+
+  $checked:
+    icon-color: #f6f1e2
+
+// RAISED. One character, two lines. The row you are about to play switches to
+// the same frame at its light weight.
 CharacterWidget < UIWidget
-  height: 14
-  background-color: alpha
+  height: 44
+  margin-bottom: 2
+  focusable: true
+  image-source: /images/ui/2pixel-up-frame-borderimage
+  image-border: 2
+  image-color: #c4c4c4
+
   &updateOnStates: |
     function(self)
       local children = self:getChildren()
@@ -11,129 +79,170 @@ CharacterWidget < UIWidget
   @onFocusChange: self:updateOnStates()
   @onSetup: self:updateOnStates()
 
+  $hover:
+    image-color: #e4e4e4
+
   $focus:
-    background-color: #ffffff22
+    image-color: #ffffff
+
+  CLFrame
+    id: portraitFrame
+    size: 36 36
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 5
+
+  // Sibling of the recess, not a child: getChildById is not recursive, and the
+  // Lua reaches this by id. 32x32 is the outfit's own size -- no scaling.
+  UICreature
+    id: portrait
+    size: 32 32
+    anchors.centerIn: portraitFrame
+    phantom: true
+    focusable: false
+
+  CLPin
+    id: pin
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    // Clears the 12px scrollbar that overlays the right edge of the list.
+    margin-right: 20
 
   Label
     id: name
-    color: #bbbbbb
     anchors.top: parent.top
-    anchors.left: parent.left
-    font: verdana-11px-antialised
-    text-auto-resize: true
+    anchors.left: portraitFrame.right
+    anchors.right: pin.left
+    margin-top: 7
+    margin-left: 9
+    margin-right: 8
+    height: 15
+    font: Verdana Bold-11px
+    color: #c4c4c4
     background-color: alpha
-    text-offset: 2 0
 
     $on:
-      color: #ffffff
+      color: #f6f1e2
+
+  Label
+    id: meta
+    anchors.top: prev.bottom
+    anchors.left: portraitFrame.right
+    anchors.right: pin.left
+    margin-top: 2
+    margin-left: 9
+    margin-right: 8
+    height: 14
+    font: verdana-11px-monochrome
+    color: #8e8e8e
+    background-color: alpha
+
+    $on:
+      color: #bdbdbd
 
 MainWindow
   id: charactersWindow
   !text: tr('Select Character')
   visible: false
-  size: 236 294
+  size: 360 400
   $mobile:
-    size: 350 280
+    size: 340 400
   @onEnter: CharacterList.doLogin()
   @onEscape: CharacterList.hide(true)
   @onSetup: |
     g_keyboard.bindKeyPress('Up', function() self:getChildById('characters'):focusPreviousChild(KeyboardFocusReason) end, self)
-    g_keyboard.bindKeyPress('Down', function() self:getChildById('characters'):focusNextChild(KeyboardFocusReason) end, self)  
+    g_keyboard.bindKeyPress('Down', function() self:getChildById('characters'):focusNextChild(KeyboardFocusReason) end, self)
+    g_keyboard.bindKeyDown('Ctrl+P', function() CharacterList.togglePinOnFocused() end, self)
 
-  Label
-    text: Select character:
-    anchors.left: parent.left
-    anchors.top: parent.top
-    text-auto-resize: true
-
-  TextList
+  CLList
     id: characters
-    anchors.top: prev.bottom
+    anchors.top: parent.top
     anchors.left: parent.left
     anchors.right: parent.right
-    height: 146
+    height: 292
     focusable: false
     vertical-scrollbar: characterListScrollBar
-    auto-focus: first
-    margin-top: 2
 
   VerticalScrollBar
     id: characterListScrollBar
     anchors.top: prev.top
     anchors.bottom: prev.bottom
     anchors.right: prev.right
-    step: 14
-    margin-top: 1
-    margin-right: 1
-    margin-bottom: 1
+    step: 46
+    minimum: 0
+    maximum: 0
+    margin-top: 2
+    margin-right: 2
+    margin-bottom: 2
     pixels-scroll: true
 
+  // The premium line reads as two things, so it is two labels: what the
+  // account is, quietly on the left, and how long it lasts, bright and bold on
+  // the right where the eye lands. The days label is declared FIRST so the
+  // status label can end where it begins and clip instead of overlapping it.
   Label
-    id: accountStatusCaption
-    !text: tr('Account Status') .. ':'
-    anchors.left: parent.left
+    id: accountDaysLabel
+    anchors.right: parent.right
     anchors.top: characters.bottom
-    margin-top: 10
+    margin-top: 7
+    margin-right: 2
+    height: 16
+    text-auto-resize: true
+    text-align: right
+    font: Verdana Bold-11px
+    color: #f6f1e2
+
+    $on:
+      color: #e8b964
 
   Label
     id: accountStatusLabel
     !text: tr('Free Account')
     anchors.left: parent.left
-    anchors.top: prev.bottom
-    margin-top: 1
-    text-auto-resize: true
+    anchors.right: accountDaysLabel.left
+    anchors.verticalCenter: accountDaysLabel.verticalCenter
+    margin-right: 8
+    height: 14
+    font: verdana-11px-monochrome
+    color: #8e8e8e
 
     $on:
-      color: #FF0000
+      color: #e8825c
 
-  HorizontalSeparator
-    id: separator
+  CLSep
+    id: bottomSeparator
     anchors.left: parent.left
     anchors.right: parent.right
-    anchors.bottom: next.top
-    margin-bottom: 9
+    anchors.top: accountDaysLabel.bottom
+    margin-top: 8
 
-  Button
+  CheckBox
     id: autoReconnect
-    width: 100
-    size: 100 20
+    !text: tr('Auto reconnect')
+    !tooltip: tr('Log back in by itself after a disconnect')
     anchors.left: parent.left
     anchors.bottom: parent.bottom
-    image-source: /images/ui/longbutton
-    image-clip: 0 0 86 20
-    image-border: 3
-    
-    $!on:
-      image-color: #FF5252
-      !text: tr('Auto reconnect: Off')
-
-    $on:
-      !text: tr('Auto reconnect: On')
-      image-color: #52FF52
-      image-clip: 0 20 86 20
-      text-offset: 1 1
-
-    $hover !disabled:
-      image-clip: 0 0 86 20
-
-    $pressed:
-      image-clip: 0 20 86 20
-      text-offset: 1 1
+    margin-bottom: 2
+    width: 130
+    font: verdana-11px-monochrome
+    color: #8e8e8e
 
     $checked:
-      image-clip: 0 20 86 20
+      color: #c4c4c4
 
   EnterGameButton
     id: buttonOk
     !text: tr('Ok')
+    width: 60
     anchors.right: next.left
     anchors.bottom: parent.bottom
-    margin-right: 10
+    margin-right: 8
     @onClick: CharacterList.doLogin()
 
   EnterGameButton
     id: buttonCancel
     !text: tr('Cancel')
+    width: 60
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     @onClick: CharacterList.hide(true)

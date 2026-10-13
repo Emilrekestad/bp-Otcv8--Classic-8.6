@@ -26,8 +26,99 @@ local protos = {
 	"1200",
 	"1220"
 }
-local checkedByUpdater = {}
 local waitingForHttpResults = 0
+local loginAttempt = 0 -- a check that ends after the player pressed Cancel must not open the list
+
+-- The client gate's two refusals (docs/client-launcher/GATE.md section 1). A
+-- contract: they equal BackpackOTClient::OUTDATED_MESSAGE and REQUIRED_MESSAGE
+-- in tfs-source/src/backpackotclient.h. Change both sides together.
+local GATE_MESSAGES = {
+	["Your client is out of date. Please restart it to update."] = true,
+	["This server requires the BackpackOT client. Download it at backpackot.com/downloads."] = true
+}
+local RELOGIN_KEY = "updater-relogin"
+local RELOGIN_MAX_AGE = 600 -- seconds: a re-login older than this is thrown away unused
+
+-- The update checks (docs/client-launcher/PLAN.md 3.2). Only a client that runs
+-- from data.zip loads the updater; a development copy sets UPDATER_DEV.
+local function updaterReady()
+	return Updater ~= nil and Updater.check ~= nil and not UPDATER_DEV
+end
+
+local function destroyLoadBox()
+	if loadBox then
+		loadBox:destroy()
+
+		loadBox = nil
+	end
+end
+
+-- Config:setValue appends instead of replacing, and remove() takes one copy.
+local function settingClear(key)
+	for _ = 1, 8 do
+		if not g_settings.exists(key) then
+			return
+		end
+
+		g_settings.remove(key)
+	end
+end
+
+-- The re-login the updater left before its restart: read once, cleared at
+-- once, used only if it is recent.
+local function takeRelogin()
+	if not g_settings.exists(RELOGIN_KEY) then
+		return nil
+	end
+
+	local raw = g_settings.getString(RELOGIN_KEY)
+
+	settingClear(RELOGIN_KEY)
+	g_settings.save()
+
+	local ok, data = pcall(function ()
+		return json.decode(g_crypt.decrypt(raw))
+	end)
+
+	if not ok or type(data) ~= "table" or type(data.account) ~= "string" or #data.account == 0 or type(data.password) ~= "string" then
+		g_logger.info("updater: re-login after restart not readable, skipped")
+
+		return nil
+	end
+
+	if type(data.time) ~= "number" or math.abs(os.time() - data.time) > RELOGIN_MAX_AGE then
+		g_logger.info("updater: re-login after restart too old, skipped")
+
+		return nil
+	end
+
+	return data
+end
+
+-- An account check that updates again right after an update restart keeps the
+-- character that is still waiting to be pre-selected (CharacterList.preselect).
+local function saveReloginKeepingCharacter()
+	local preselect = CharacterList and CharacterList.preselect
+
+	EnterGame.saveRelogin(preselect and preselect.name, preselect and preselect.world)
+end
+
+-- Missing or damaged game files are a reason to update. A client that is
+-- current anyway shows the error, as before.
+local function updateOrError(message)
+	if not updaterReady() then
+		return EnterGame.onError(message)
+	end
+
+	Updater.check({
+		stage = "account",
+		onShow = destroyLoadBox,
+		onCurrent = function ()
+			EnterGame.onError(message)
+		end,
+		onUpdated = saveReloginKeepingCharacter
+	})
+end
 
 local function onProtocolError(protocol, message, errorCode)
 	if errorCode then
@@ -39,6 +130,13 @@ end
 
 local function onSessionKey(protocol, sessionKey)
 	G.sessionKey = sessionKey
+end
+
+-- Today's boosted creature and boss, sent with the character list (opcode
+-- 0xA1). Parsed so the rest of the message is not read as garbage; kept here
+-- for whatever wants to show it.
+local function onBoostedInfo(protocol, boosted)
+	G.boostedInfo = boosted
 end
 
 local function onMotd(protocol, motd)
@@ -60,7 +158,7 @@ local function onMotd(protocol, motd)
 	end
 end
 
-local function onCharacterList(protocol, characters, account, otui)
+local function showCharacterList(protocol, characters, account, otui)
 	if rememberPasswordBox:isChecked() then
 		local account = g_crypt.encrypt(G.account)
 		local password = g_crypt.encrypt(G.password)
@@ -105,6 +203,39 @@ local function onCharacterList(protocol, characters, account, otui)
 	end
 
 	g_settings.save()
+end
+
+-- Stage B (PLAN.md 3.2): the account was accepted; the list opens only on a
+-- current client. An old client updates and restarts instead, then logs in
+-- again by itself (EnterGame.init).
+local function onCharacterList(protocol, characters, account, otui)
+	if not updaterReady() then
+		return showCharacterList(protocol, characters, account, otui)
+	end
+
+	local attempt = loginAttempt
+	local done = false
+
+	Updater.check({
+		stage = "account",
+		onShow = destroyLoadBox,
+		onCurrent = function ()
+			done = true
+
+			if attempt == loginAttempt then
+				showCharacterList(protocol, characters, account, otui)
+			end
+		end,
+		onUpdated = saveReloginKeepingCharacter
+	})
+
+	if not done and loadBox then
+		local label = loadBox:getChildById("messageBoxLabel")
+
+		if label then
+			label:setText(tr("Checking for updates..."))
+		end
+	end
 end
 
 local function onUpdateNeeded(protocol, signature)
@@ -213,16 +344,7 @@ local function onTibia12HTTPResult(session, playdata)
 	if #incorrectThings > 0 then
 		g_logger.error(incorrectThings)
 
-		if Updater and not checkedByUpdater[G.clientVersion] then
-			checkedByUpdater[G.clientVersion] = true
-
-			return Updater.check({
-				version = G.clientVersion,
-				host = G.host
-			})
-		else
-			return EnterGame.onError(incorrectThings)
-		end
+		return updateOrError(incorrectThings)
 	end
 
 	onSessionKey(nil, session.sessionkey)
@@ -387,6 +509,25 @@ function EnterGame.init()
 	rememberPasswordBox:setChecked(#account > 0)
 	g_keyboard.bindKeyDown("Ctrl+G", EnterGame.openWindow)
 
+	-- After an update restart: log in again by itself, once (PLAN.md phase 1).
+	local relogin = takeRelogin()
+
+	if relogin and not g_game.isOnline() then
+		if type(relogin.character) == "string" and CharacterList then
+			CharacterList.preselect = {
+				name = relogin.character,
+				world = relogin.world
+			}
+		end
+
+		g_logger.info("updater: logging in again after the update restart")
+		addEvent(function ()
+			if EnterGame and not g_game.isOnline() and not g_game.isLogging() then
+				EnterGame.doLogin(relogin.account, relogin.password)
+			end
+		end)
+	end
+
 	if g_game.isOnline() then
 		return EnterGame.hide()
 	end
@@ -500,6 +641,7 @@ function EnterGame.doLogin(account, password, token, host)
 	end
 
 	local server = Server
+	loginAttempt = loginAttempt + 1
 	G.account = account or enterGame:getChildById("accountNameTextEdit"):getText()
 	G.password = password or enterGame:getChildById("accountPasswordTextEdit"):getText()
 	G.stayLogged = true
@@ -546,22 +688,14 @@ function EnterGame.doLogin(account, password, token, host)
 	if #incorrectThings > 0 then
 		g_logger.error(incorrectThings)
 
-		if Updater and not checkedByUpdater[G.clientVersion] then
-			checkedByUpdater[G.clientVersion] = true
-
-			return Updater.check({
-				version = G.clientVersion,
-				host = G.host
-			})
-		else
-			return EnterGame.onError(incorrectThings)
-		end
+		return updateOrError(incorrectThings)
 	end
 
 	protocolLogin = ProtocolLogin.create()
 	protocolLogin.onLoginError = onProtocolError
 	protocolLogin.onSessionKey = onSessionKey
 	protocolLogin.onCharacterList = onCharacterList
+	protocolLogin.onBoostedInfo = onBoostedInfo
 	protocolLogin.onUpdateNeeded = onUpdateNeeded
 	protocolLogin.onProxyList = onProxyList
 	protocolLogin.onMotd = onMotd
@@ -573,6 +707,11 @@ function EnterGame.doLogin(account, password, token, host)
 	connect(loadBox, {
 		onCancel = function (msgbox)
 			loadBox = nil
+			loginAttempt = loginAttempt + 1
+
+			if updaterReady() then
+				Updater.cancel()
+			end
 
 			protocolLogin:cancelLogin()
 			EnterGame.show()
@@ -663,11 +802,90 @@ function EnterGame.onError(err)
 	errorBox.onOk = EnterGame.show
 end
 
+-- Called by the updater just before it restarts the client (onUpdated). The
+-- next start reads it once, clears it and logs in with it (EnterGame.init).
+-- Encrypted as "Remember password" stores the password.
+function EnterGame.saveRelogin(character, world)
+	if type(G.account) ~= "string" or #G.account == 0 or type(G.password) ~= "string" then
+		return
+	end
+
+	local data = json.encode({
+		account = G.account,
+		password = G.password,
+		character = character,
+		world = world,
+		time = os.time()
+	})
+
+	settingClear(RELOGIN_KEY)
+	g_settings.set(RELOGIN_KEY, g_crypt.encrypt(data))
+	g_settings.save()
+end
+
+function EnterGame.isGateMessage(message)
+	return GATE_MESSAGES[message] == true
+end
+
+-- [Check for updates] (PLAN.md 3.2, the server backstop): the account check
+-- with the window on screen, so "up to date" is said too.
+function EnterGame.checkForUpdates(onCurrent, character, world)
+	Updater.check({
+		stage = "account",
+		showCurrent = true,
+		fresh = true,
+		onCurrent = onCurrent or EnterGame.show,
+		onUpdated = function ()
+			EnterGame.saveRelogin(character, world)
+		end
+	})
+end
+
 function EnterGame.onLoginError(err)
 	if loadBox then
 		loadBox:destroy()
 
 		loadBox = nil
+	end
+
+	if GATE_MESSAGES[err] and updaterReady() then
+		local gateBox = nil
+
+		local function closeBox()
+			local box = gateBox
+			gateBox = nil
+
+			if box then
+				box:destroy()
+			end
+
+			return box ~= nil
+		end
+
+		local function checkNow()
+			if closeBox() then
+				EnterGame.checkForUpdates()
+			end
+		end
+
+		local function close()
+			if closeBox() then
+				EnterGame.show()
+			end
+		end
+
+		gateBox = displayGeneralBox(tr("Login Error"), err, {
+			{
+				text = tr("Check for updates"),
+				callback = checkNow
+			},
+			{
+				text = tr("Ok"),
+				callback = close
+			}
+		}, checkNow, close)
+
+		return
 	end
 
 	local errorBox = displayErrorBox(tr("Login Error"), err)

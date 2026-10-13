@@ -16,6 +16,71 @@ LoginServerProxyList = 110
 LoginServerRetry = 10
 LoginServerErrorNew = 11
 
+-- BackpackOT client gate: the BPOT marker signature (docs/client-launcher/GATE.md
+-- sections 4 and 5). Port of BackpackOTClient::generateSignature
+-- (tfs-source/src/backpackotclient.h) to the engine's bit32: arguments are read
+-- modulo 2^32, results are unsigned. Only a plain + does not wrap, so the one
+-- sum is reduced with % 2^32. Checked against the C++ test vectors:
+-- tools/client-gate-release/gate_signature.lua is this code.
+local bor, bxor = bit32.bor, bit32.bxor
+local lshift, rshift = bit32.lshift, bit32.rshift
+local UINT32 = 4294967296
+
+local function rotateLeft(value, bits)
+  return bor(lshift(value, bits), rshift(value, 32 - bits))
+end
+
+-- C++: hash ^= value + 0x9E3779B9 + (hash << 6) + (hash >> 2);
+--      return rotateLeft(hash, 7) ^ (value >> 3);
+local function mixSignature(hash, value)
+  local sum = (value + 0x9E3779B9 + lshift(hash, 6) + rshift(hash, 2)) % UINT32
+  hash = bxor(hash, sum)
+  return bxor(rotateLeft(hash, 7), rshift(value, 3))
+end
+
+-- os, version: the two u16 at the head of the packet, exactly as written.
+-- xteaKey: the four key words, in the order they were written (1..4).
+-- challengeTimestamp, challengeRandom: 0 (or nil) in the login-server packet.
+-- Returns the number to write with msg:addU32 (0..4294967295).
+function generateBpotSignature(os, version, xteaKey, challengeTimestamp, challengeRandom)
+  local hash = 0xC19BC793
+  hash = mixSignature(hash, 0xA0722E49)
+  hash = mixSignature(hash, 0xD17CE629)
+  hash = mixSignature(hash, os)
+  hash = mixSignature(hash, version)
+  for i = 1, 4 do
+    hash = mixSignature(hash, xteaKey[i])
+  end
+  hash = mixSignature(hash, challengeTimestamp or 0)
+  hash = mixSignature(hash, challengeRandom or 0)
+  return bxor(hash, 0x0FA53ED2)
+end
+
+-- BackpackOT character list: the login server answers 0x65
+-- (LoginServerExtendedCharacterList) with outfit, level and vocation per
+-- character, then a 0xA1 block with today's boosted creature and boss -- but
+-- ONLY when the login packet starts its markers with "A" + this signature
+-- (GATE.md layout B: "A" + u32 | "BPOT" + u32 + u16 | u16 0). Without it the
+-- answer is the plain 8.60 list (0x64, names only). Server side:
+-- tfs-source/src/protocollogin.cpp getCharacterList and astraclient.h.
+LoginServerBoostedInfo = 0xA1
+BPOT_LOGIN_MARKER = "A"
+
+-- Port of AstraClient::generateSignature; same mixer as the BPOT signature.
+function generateLoginSignature(os, version, xteaKey)
+  local hash = 0xA57AC11E
+  hash = mixSignature(hash, 0x41737472) -- 'Astr'
+  hash = mixSignature(hash, 0x61436C69) -- 'aCli'
+  hash = mixSignature(hash, os)
+  hash = mixSignature(hash, version)
+  for i = 1, 4 do
+    hash = mixSignature(hash, xteaKey[i])
+  end
+  hash = mixSignature(hash, 0) -- challengeTimestamp, unused at login
+  hash = mixSignature(hash, 0) -- challengeRandom, unused at login
+  return bxor(hash, 0x4D415354)
+end
+
 function ProtocolLogin:login(host, port, accountName, accountPassword, authenticatorToken, stayLogged)
   if string.len(host) == 0 or port == nil or port == 0 then
     signalcall(self.onLoginError, self, tr("You must enter a valid server address and port."))
@@ -38,12 +103,12 @@ end
 function ProtocolLogin:sendLoginPacket()
   local msg = OutputMessage.create()
   msg:addU8(ClientOpcodes.ClientEnterAccount)
-  msg:addU16(g_game.getOs())
-  if g_game.getCustomProtocolVersion() > 0 then
-    msg:addU16(g_game.getCustomProtocolVersion())  
-  else
-    msg:addU16(g_game.getProtocolVersion())
-  end
+  -- kept: the BPOT signature covers the os and version exactly as written
+  local packetOs = g_game.getOs()
+  local packetVersion = g_game.getCustomProtocolVersion() > 0 and g_game.getCustomProtocolVersion()
+                        or g_game.getProtocolVersion()
+  msg:addU16(packetOs)
+  msg:addU16(packetVersion)
 
   if g_game.getFeature(GameClientVersion) then
     msg:addU32(g_game.getClientVersion())
@@ -62,6 +127,7 @@ function ProtocolLogin:sendLoginPacket()
     msg:addU8(0)
   end
 
+  local xteaKey = nil
   local offset = msg:getMessageSize()
   if g_game.getFeature(GameLoginPacketEncryption) then
     -- first RSA byte must be 0
@@ -69,7 +135,7 @@ function ProtocolLogin:sendLoginPacket()
 
     -- xtea key
     self:generateXteaKey()
-    local xteaKey = self:getXteaKey()
+    xteaKey = self:getXteaKey()
     msg:addU32(xteaKey[1])
     msg:addU32(xteaKey[2])
     msg:addU32(xteaKey[3])
@@ -88,12 +154,26 @@ function ProtocolLogin:sendLoginPacket()
     local data = self:getLoginExtendedData()
     msg:addString(data)
   else
-    msg:addString("OTCv8")
-    local version = g_app.getVersion():split(" ")[1]:gsub("%.", "")
-    if version:len() == 2 then
-      version = version .. "0" 
+    if xteaKey then
+      -- First marker "A" (GATE.md layout B): asks for the rich character list.
+      msg:addString(BPOT_LOGIN_MARKER)
+      msg:addU32(generateLoginSignature(packetOs, packetVersion, xteaKey))
+    else
+      msg:addString("OTCv8")
+      local version = g_app.getVersion():split(" ")[1]:gsub("%.", "")
+      if version:len() == 2 then
+        version = version .. "0"
+      end
+      msg:addU16(tonumber(version))
     end
-    msg:addU16(tonumber(version))
+    -- BackpackOT client gate (GATE.md section 2.2): "BPOT", the signature and
+    -- this client's release, then u16 0, because the padding below is random.
+    if xteaKey then
+      msg:addString("BPOT")
+      msg:addU32(generateBpotSignature(packetOs, packetVersion, xteaKey))
+      msg:addU16(tonumber(APP_VERSION) or 0)
+      msg:addU16(0) -- end of markers
+    end
   end
 
   local paddingBytes = g_crypt.rsaGetSize() - (msg:getMessageSize() - offset)
@@ -176,11 +256,13 @@ function ProtocolLogin:onRecv(msg)
     elseif opcode == LoginServerTokenError then
       -- TODO: prompt for token here
       local unknown = msg:getU8()
-      signalcall(self.onLoginError, self, tr("Invalid authentification token."))
+      signalcall(self.onLoginError, self, tr("Invalid authentication token."))
     elseif opcode == LoginServerCharacterList then
       self:parseCharacterList(msg)
     elseif opcode == LoginServerExtendedCharacterList then
       self:parseExtendedCharacterList(msg)
+    elseif opcode == LoginServerBoostedInfo then
+      self:parseBoostedInfo(msg)
     elseif opcode == LoginServerUpdate then
       local signature = msg:getString()
       signalcall(self.onUpdateNeeded, self, signature)      
@@ -282,11 +364,64 @@ function ProtocolLogin:parseCharacterList(msg)
   signalcall(self.onCharacterList, self, characters, account)
 end
 
+-- 0x65: the plain 8.60 list plus outfit, level and vocation per character.
+-- Built by ProtocolLogin::getCharacterList in tfs-source/src/protocollogin.cpp;
+-- the two must stay in step. (This replaces OTCv8's own use of opcode 101, a
+-- serialised table plus an .otui name, which no BackpackOT server sends.)
 function ProtocolLogin:parseExtendedCharacterList(msg)
-  local characters = msg:getTable()
-  local account = msg:getTable()
-  local otui = msg:getString()
-  signalcall(self.onCharacterList, self, characters, account, otui)
+  local characters = {}
+
+  local charactersCount = msg:getU8()
+  for i = 1, charactersCount do
+    local character = {}
+    character.name = msg:getString()
+    character.worldName = msg:getString()
+    character.worldIp = iptostring(msg:getU32())
+    character.worldPort = msg:getU16()
+    character.outfit = {
+      type = msg:getU16(),
+      head = msg:getU8(),
+      body = msg:getU8(),
+      legs = msg:getU8(),
+      feet = msg:getU8(),
+      addons = msg:getU8()
+    }
+    character.level = msg:getU32()
+    character.vocation = msg:getString()
+    characters[i] = character
+  end
+
+  local account = {}
+  account.status = AccountStatus.Ok
+  account.premDays = msg:getU16()
+  account.subStatus = account.premDays > 0 and SubscriptionStatus.Premium or SubscriptionStatus.Free
+
+  signalcall(self.onCharacterList, self, characters, account)
+end
+
+-- 0xA1, sent straight after the 0x65 list: today's boosted creature and boss.
+-- It MUST be read even though nothing shows it yet, or the rest of the
+-- message would be read as opcodes.
+function ProtocolLogin:parseBoostedInfo(msg)
+  local function readEntry()
+    local entry = {}
+    entry.name = msg:getString()
+    entry.outfit = {
+      type = msg:getU16(),
+      head = msg:getU8(),
+      body = msg:getU8(),
+      legs = msg:getU8(),
+      feet = msg:getU8(),
+      addons = msg:getU8()
+    }
+    return entry
+  end
+
+  local boosted = {
+    creature = readEntry(),
+    boss = readEntry()
+  }
+  signalcall(self.onBoostedInfo, self, boosted)
 end
 
 function ProtocolLogin:parseOpcode(opcode, msg)
