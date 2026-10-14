@@ -630,6 +630,26 @@ local function itemMatchesSearch(itemId, name)
 	return name:lower():find(text, 1, true) ~= nil or tostring(itemId):find(text, 1, true) ~= nil
 end
 
+withdrawMax = 1
+syncingWithdraw = false
+
+-- Typed amount: digits only, never above what the stash holds.
+function onWithdrawTyped(text)
+	if syncingWithdraw or not withdrawWindow then return end
+	local digits = text:gsub('%D', '')
+	local value = tonumber(digits)
+	if value and value > withdrawMax then value = withdrawMax end
+	local clean = value and tostring(value) or ''
+	if clean ~= text then
+		syncingWithdraw = true
+		withdrawWindow.countEdit:setText(clean)
+		syncingWithdraw = false
+	end
+	if value and value >= 1 then
+		withdrawWindow.countScrollBar:setValue(value)
+	end
+end
+
 local function openWithdrawWindow(itemId, amount, tier)
 	hideWindow()
 	withdrawWindow:show()
@@ -649,8 +669,27 @@ local function openWithdrawWindow(itemId, amount, tier)
 	withdrawWindow.countScrollBar:setMinimum(1)
 	withdrawWindow.countScrollBar:setMaximum(amount)
 	withdrawWindow.countScrollBar:setValue(1)
+	withdrawMax = amount
+	withdrawWindow.countEdit:setText('1')
+	withdrawWindow.countEdit:focus()
+	withdrawWindow.countEdit:setCursorPos(1)
 	withdrawWindow.countScrollBar.onValueChange = function(widget, value)
 		withdrawWindow.count:setText(value)
+		if tonumber(withdrawWindow.countEdit:getText()) ~= value then
+			syncingWithdraw = true
+			withdrawWindow.countEdit:setText(tostring(value))
+			syncingWithdraw = false
+		end
+	end
+	-- Left / Right change the amount by one (held keys repeat).
+	withdrawWindow.countEdit.onKeyPress = function(widget, keyCode)
+		if keyCode == KeyLeft or keyCode == KeyRight then
+			local value = tonumber(widget:getText()) or 1
+			value = math.max(1, math.min(withdrawMax, value + (keyCode == KeyRight and 1 or -1)))
+			withdrawWindow.countScrollBar:setValue(value)
+			return true
+		end
+		return false
 	end
 
 	local buttonCancel = withdrawWindow:recursiveGetChildById('buttonCancel')

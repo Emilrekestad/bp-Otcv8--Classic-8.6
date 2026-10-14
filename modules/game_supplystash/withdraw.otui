@@ -1,7 +1,7 @@
 MainWindow
   id: countWindow
-  !text: tr('Retreive Items')
-  size: 245 143
+  !text: tr('Retrieve Items')
+  size: 245 170
   @onEscape: withdrawHide()
 
   Item
@@ -19,7 +19,7 @@ MainWindow
     anchors.right: parent.right
     margin-left: 10
     text-align: topleft
-    text: Set or type the number of items you want to retreive
+    !text: tr('Type the amount, or use the slider or the arrow keys.')
     text-auto-resize: true
     text-wrap: true
 
@@ -32,9 +32,19 @@ MainWindow
     text-align: right
     font: verdana-11px-rounded
 
+  TextEdit
+    id: countEdit
+    width: 90
+    anchors.left: countScrollBar.left
+    anchors.bottom: countScrollBar.top
+    margin-bottom: 8
+    text-align: center
+    max-length: 10
+    @onTextChange: modules.game_supplystash.onWithdrawTyped(self:getText())
+
   HorizontalScrollBar
     id: countScrollBar
-    anchors.left: prev.right
+    anchors.left: item.right
     anchors.right: parent.right
     anchors.bottom: horizontalSeparator.top
     margin-left: 10

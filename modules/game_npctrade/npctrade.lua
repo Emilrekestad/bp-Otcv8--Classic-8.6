@@ -24,10 +24,11 @@ sellTab = nil
 initialized = false
 
 showWeight = true
+buyOptions = nil
 buyWithBackpack = nil
-ignoreCapacity = nil
 ignoreEquipped = nil
 showAllItems = nil
+sellAllButton = nil
 playerFreeCapacity = 0
 playerMoney = 0
 tradeItems = {}
@@ -56,10 +57,11 @@ function init()
   currancyIDitem = npcWindow:recursiveGetChildById('currancyIDitem')
 
   
+  buyOptions = npcWindow:recursiveGetChildById('buyOptions')
   buyWithBackpack = npcWindow:recursiveGetChildById('buyWithBackpack')
-  ignoreCapacity = npcWindow:recursiveGetChildById('ignoreCapacity')
   ignoreEquipped = npcWindow:recursiveGetChildById('ignoreEquipped')
   showAllItems = npcWindow:recursiveGetChildById('showAllItems')
+  sellAllButton = npcWindow:recursiveGetChildById('sellAllButton')
   buyTab = npcWindow:recursiveGetChildById('buyTab')
   sellTab = npcWindow:recursiveGetChildById('sellTab')
 
@@ -165,9 +167,11 @@ function onTradeTypeChange(radioTabs, selected, deselected)
 
   local currentTradeType = getCurrentTradeType()
   buyWithBackpack:setVisible(currentTradeType == BUY)
-  ignoreCapacity:setVisible(currentTradeType == BUY)
   ignoreEquipped:setVisible(currentTradeType == SELL)
   showAllItems:setVisible(currentTradeType == SELL)
+  sellAllButton:setVisible(currentTradeType == SELL)
+  -- Buying has one option, selling has two: size the box to what it holds.
+  buyOptions:setHeight(currentTradeType == BUY and 20 or 35)
   
   refreshTradeItems()
   refreshPlayerGoods()
@@ -176,7 +180,7 @@ end
 function onTradeClick()
   removeEvent(sellAllWithDelayEvent)
   if getCurrentTradeType() == BUY then
-    g_game.buyItem(selectedItem.ptr, quantityScroll:getValue(), ignoreCapacity:isChecked(), buyWithBackpack:isChecked())
+    g_game.buyItem(selectedItem.ptr, quantityScroll:getValue(), false, buyWithBackpack:isChecked())
   else
     g_game.sellItem(selectedItem.ptr, quantityScroll:getValue(), ignoreEquipped:isChecked())
   end
@@ -213,10 +217,6 @@ function onBuyWithBackpackChange()
   end
 end
 
-function onIgnoreCapacityChange()
-  refreshPlayerGoods()
-end
-
 function onIgnoreEquippedChange()
   refreshPlayerGoods()
 end
@@ -232,10 +232,6 @@ end
 
 function setShowWeight(state)
   showWeight = state
-end
-
-function setShowYourCapacity(state)
-  ignoreCapacity:setVisible(state)
 end
 
 function ItemShowCoin()
@@ -298,7 +294,7 @@ end
 
 function canTradeItem(item)
   if getCurrentTradeType() == BUY then
-    return (ignoreCapacity:isChecked() or (not ignoreCapacity:isChecked() and playerFreeCapacity >= item.weight)) and playerMoney >= getItemPrice(item, true)
+    return playerFreeCapacity >= item.weight and playerMoney >= getItemPrice(item, true)
   else
     return getSellQuantity(item.ptr) > 0
   end
@@ -309,9 +305,6 @@ function refreshItem(item)
 
   if getCurrentTradeType() == BUY then
     local capacityMaxCount = math.floor(playerFreeCapacity / item.weight)
-    if ignoreCapacity:isChecked() then
-      capacityMaxCount = 65535
-    end
     local priceMaxCount = math.floor(playerMoney / getItemPrice(item, true))
     local finalCount = math.max(0, math.min(getMaxAmount(), math.min(priceMaxCount, capacityMaxCount)))
     quantityScroll:setMinimum(1)
@@ -353,6 +346,8 @@ function refreshTradeItems()
       text = text .. '\n' .. price .. ', '.. weight
     end
     itemBox:setText(text)
+    -- Long names are cut off at the scrollbar; the tooltip carries the full one.
+    itemBox:setTooltip(name)
     local itemWidget = itemBox:getChildById('item')
     itemWidget:setItem(item.ptr)
     ItemsDatabase.setTier(itemWidget, item.ptr)
@@ -385,9 +380,11 @@ function refreshPlayerGoods()
     local canTrade = canTradeItem(item)
     itemWidget:setOn(canTrade)
     itemWidget:setEnabled(canTrade)
+    local icon = itemWidget:getChildById('item')
+    if icon then icon:setOpacity(canTrade and 1 or 0.35) end
 
     local searchCondition = (searchFilter == '') or (searchFilter ~= '' and string.find(item.name:lower(), searchFilter) ~= nil)
-    local showAllItemsCondition = (currentTradeType == BUY) or (showAllItems:isChecked()) or (currentTradeType == SELL and not showAllItems:isChecked() and canTrade)
+    local showAllItemsCondition = (currentTradeType == BUY) or (not showAllItems:isChecked()) or canTrade
     itemWidget:setVisible(searchCondition and showAllItemsCondition)
 
     if selectedItem == item and itemWidget:isEnabled() and itemWidget:isVisible() then
@@ -438,6 +435,12 @@ end
 
 function onCloseNpcTrade()
   addEvent(hide)
+end
+
+-- The window's X button. Without this the window hid but the server still
+-- thought the trade was open.
+function onMiniWindowClose()
+  closeNpcTrade()
 end
 
 function onPlayerGoods(money, items)
@@ -506,7 +509,7 @@ function checkSellAllTooltip()
           info = info..(not first and "\n" or "")..
                  amount.." "..
                  data.name.." ("..
-                 data.price*amount.." gold)"
+                 comma_value(data.price*amount).." gold)"
 
           total = total+(data.price*amount)
           if first then first = false end
@@ -518,9 +521,9 @@ end
 
 function formatCurrency(amount)
   if CURRENCY_DECIMAL then
-    return string.format("%.02f", amount/100.0) .. ' ' .. CURRENCY
+    return comma_value(string.format("%.02f", amount/100.0))
   else
-    return amount .. ' ' .. CURRENCY
+    return comma_value(amount)
   end
 end
 
@@ -529,6 +532,56 @@ function getMaxAmount()
     return 10000
   end
   return 100
+end
+
+-- What "Sell all" would sell: every offer the NPC buys that the player holds
+-- in containers. Worn items are never counted, whatever the checkbox says.
+function getSellAllList()
+  local list, total = {}, 0
+  local worn = {}
+  local localPlayer = g_game.getLocalPlayer()
+  for i = 1, LAST_INVENTORY do
+    local inventoryItem = localPlayer:getInventoryItem(i)
+    if inventoryItem then
+      worn[inventoryItem:getId()] = (worn[inventoryItem:getId()] or 0) + inventoryItem:getCount()
+    end
+  end
+  for _, entry in ipairs(tradeItems[SELL] or {}) do
+    local id = entry.ptr:getId()
+    local amount = (playerItems[id] or 0) - (worn[id] or 0)
+    if amount > 0 then
+      table.insert(list, { ptr = entry.ptr, amount = amount, name = entry.name, price = entry.price })
+      total = total + entry.price * amount
+    end
+  end
+  return list, total
+end
+
+function onSellAllClick()
+  local list, total = getSellAllList()
+  if #list == 0 then
+    displayInfoBox(tr('Sell all'), tr('You have nothing this NPC buys. Items you are wearing are never sold.'))
+    return
+  end
+  local count = 0
+  for _, entry in ipairs(list) do count = count + entry.amount end
+  local box
+  local function doSell()
+    if box then box:destroy() box = nil end
+    for _, entry in ipairs(list) do
+      local left = entry.amount
+      while left > 0 do
+        local chunk = math.min(left, getMaxAmount())
+        g_game.sellItem(entry.ptr, chunk, true)
+        left = left - chunk
+      end
+    end
+  end
+  local function cancel() if box then box:destroy() box = nil end end
+  box = displayGeneralBox(tr('Sell all'),
+    tr('Sell %d items for %s gold? Items you are wearing are not sold.', count, formatCurrency(total)),
+    { { text = tr('Yes'), callback = doSell }, { text = tr('No'), callback = cancel }, anchor = AnchorHorizontalCenter },
+    doSell, cancel)
 end
 
 function sellAll(delayed, exceptions)
